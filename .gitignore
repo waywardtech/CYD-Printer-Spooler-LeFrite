@@ -6,6 +6,8 @@ __pycache__/
 # Runtime spool data (jobs people printed stay on their own machine)
 spool/incoming/*
 spool/printed/*
+spool/held/
+spool/deleted/
 spool/index.jsonl
 !spool/incoming/.gitkeep
 !spool/printed/.gitkeep
