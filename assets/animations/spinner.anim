@@ -1,0 +1,28 @@
+# name: Spinning Cursor
+# fps: 8
+# loop: yes
+# note: the classic | / - \ busy indicator
+---
+
+   [|] SPOOLING
+---
+
+   [/] SPOOLING.
+---
+
+   [-] SPOOLING..
+---
+
+   [\] SPOOLING...
+---
+
+   [|] SPOOLING
+---
+
+   [/] SPOOLING.
+---
+
+   [-] SPOOLING..
+---
+
+   [\] SPOOLING...

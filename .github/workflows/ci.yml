@@ -1,0 +1,61 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  python:
+    name: Spooler tests (Python ${{ matrix.python }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Unit + end-to-end tests
+        run: python -m unittest discover -s tests -v
+      - name: Bundled animations match the generator
+        run: |
+          python tools/gen_animations.py --force
+          git diff --exit-code assets/animations
+      - name: Preview demo renders
+        run: python server/le_spooler_preview.py --demo --speed instant --no-color
+
+  firmware:
+    name: CYD firmware compiles (esp32 ${{ matrix.core }}, ${{ matrix.panel }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        core: ["2.0.17"]
+        panel: [ILI9341_2_DRIVER, ST7789_DRIVER]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: arduino/setup-arduino-cli@v2
+      - name: Cache Arduino cores and libraries
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.arduino15
+            ~/Arduino/libraries
+          key: arduino-esp32-${{ matrix.core }}-v1
+      - name: Install esp32 core and libraries
+        run: |
+          arduino-cli config init --overwrite
+          arduino-cli config add board_manager.additional_urls https://espressif.github.io/arduino-esp32/package_esp32_index.json
+          arduino-cli core update-index
+          arduino-cli core install esp32:esp32@${{ matrix.core }}
+          arduino-cli lib install TFT_eSPI ArduinoJson XPT2046_Touchscreen
+      - name: Compile
+        env:
+          PANEL: ${{ matrix.panel }}
+        run: bash firmware/build.sh

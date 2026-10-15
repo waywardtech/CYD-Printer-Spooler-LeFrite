@@ -1,0 +1,2 @@
+# LE SPOOLER's server, CLI, preview and tests use ONLY the Python 3 standard library.
+# Python 3.9+ (developed on 3.13 / Debian trixie; CI tests 3.11-3.13). Nothing to pip install.
