@@ -55,9 +55,11 @@
   .pill.printed { background: #3d5a33; }
   .id { font-family: var(--mono); color: var(--muted); white-space: nowrap; }
   #queuebox { max-height: 340px; overflow: auto; margin-top: 8px; }
-  td.t { cursor: pointer; overflow-wrap: anywhere; }
-  td.acts { white-space: nowrap; text-align: right; }
-  button.act { padding: 2px 6px; font-size: 13px; margin-left: 3px; }
+  td.t { overflow-wrap: anywhere; width: 100%; }
+  td.t .ttl { cursor: pointer; }
+  td.t .ttl:hover { text-decoration: underline; }
+  .acts { margin-top: 4px; display: flex; gap: 4px; flex-wrap: wrap; }
+  button.act { padding: 2px 7px; font-size: 13px; }
   .pill.held { background: #5a5f8a; }
   .pstat { font-size: 13px; padding: 7px 9px; border-radius: 6px; }
   .pstat.on { background: #2f4a29; color: #c9f2b6; }
@@ -141,7 +143,7 @@ Bold: B\bBO\bOL\bLD\bD   Underline: U\b_N\b_D\b_E\b_R\b_</textarea>
       <div id="printerstatus" class="pstat off">🖨 checking for printers…</div>
       <div class="check"><input type="checkbox" id="vp"><label for="vp"><b>Virtual printer:</b> let this browser tab collect and print queued jobs</label></div>
       <div id="vpmsg" class="id"></div>
-      <div id="queuebox"><table><thead><tr><th>Job</th><th>Title</th><th>Status</th><th></th></tr></thead><tbody id="queue"></tbody></table></div>
+      <div id="queuebox"><table><thead><tr><th>Job</th><th>Title</th><th>Status</th></tr></thead><tbody id="queue"></tbody></table></div>
       <div id="qmsg" class="id"></div>
     </section>
   </div>
@@ -346,14 +348,15 @@ async function refresh() {
     if (key === lastJobsKey) return;                     // nothing changed: don't redraw
     lastJobsKey = key;
     $("queue").innerHTML = "";
-    if (!jobs.length) $("queue").innerHTML = `<tr><td colspan="4" class="id">no jobs yet</td></tr>`;
+    if (!jobs.length) $("queue").innerHTML = `<tr><td colspan="3" class="id">no jobs yet</td></tr>`;
     for (const j of jobs.slice().reverse()) {
       const tr = document.createElement("tr");
       tr.className = "job";
-      tr.innerHTML = `<td class="id"></td><td class="t"></td><td><span class="pill"></span></td><td class="acts"></td>`;
+      tr.innerHTML = `<td class="id"></td><td class="t"><span class="ttl"></span><div class="acts"></div></td><td><span class="pill"></span></td>`;
       tr.children[0].textContent = j.id.slice(9);
-      tr.children[1].textContent = j.title;
-      tr.children[1].title = `${j.id} · ${j.chars} chars · from ${j.source}`;
+      const ttl = tr.querySelector(".ttl");
+      ttl.textContent = j.title;
+      ttl.title = `${j.id} · ${j.chars} chars · from ${j.source}`;
       tr.querySelector(".pill").textContent = j.status;
       tr.querySelector(".pill").classList.add(j.status);
       for (const [act, icon, label] of ACTIONS[j.status] || []) {
@@ -361,9 +364,9 @@ async function refresh() {
         b.type = "button"; b.className = "act"; b.textContent = icon; b.title = label;
         b.setAttribute("aria-label", `${label}: ${j.title}`);
         b.onclick = (e) => { e.stopPropagation(); jobAction(j, act); };
-        tr.children[3].appendChild(b);
+        tr.querySelector(".acts").appendChild(b);
       }
-      tr.children[1].onclick = () => jobAction(j, "view");
+      ttl.onclick = () => jobAction(j, "view");
       $("queue").appendChild(tr);
     }
   } catch (e) { $("status").className = "bad"; $("status").textContent = "spooler offline"; }
