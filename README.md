@@ -38,11 +38,13 @@ If you ask, it will also jam, run out of paper, and wear out its ribbon.
 |---|---|
 | 🖨️ **Print spooler** | A tiny HTTP queue (`POST /print`, `GET /next`, `POST /ack`). Pure Python standard library, nothing to install. |
 | 🌐 **Web UI** | Open `http://<your-box>:8765/` to type a document, watch the queue, and see any job typed onto animated greenbar paper. |
+| 🖋️ **Looks like real type** | Typewriter face, uneven hammer pressure, slightly translucent ribbon ink, and true **overtype**: every strike adds ink, so `e` + backspace + `'` really layers an accent onto the letter. |
+| 🖥️ **A real printer for your desktop** | A CUPS backend makes "LE SPOOLER" appear in every app's Print dialog. It can also be shared over **Bonjour** so other computers on the LAN discover it. PDFs are converted to text, and page breaks become form feeds. |
 | 💻 **Terminal preview** | The same printer in your terminal: colour greenbar, sprocket holes, char-by-char typing. |
 | ⌫ **Real printer control codes** | Backspace/overstrike, carriage return, line feed, form feed, bell, tab. |
 | é **Overstrike accents & tricks** | `é à ô ñ ç ü`, **bold** by double strike, underline with `_`, strike-through with `-`, `Ø ¢ ≠ £`. |
 | 🎲 **Printer chaos** *(optional, off by default)* | Paper jams, paper out, misstrikes, skewed paper, a ribbon that fades. |
-| 🎞️ **ASCII animations** | 10 classics on a fixed "screen": spinner, bouncing ball, waving robot, rocket, train, fish tank, matrix rain, starfield, radar, self-test page. |
+| 🎞️ **ASCII animations** | 10 classics on a fixed "screen": spinner, bouncing ball, waving robot, rocket, train, fish tank, matrix rain, starfield, radar, self-test page. **Pause, step frame by frame, and print any frame** onto the paper. |
 | 📟 **CYD firmware** | ESP32 sketch: draws the paper, types jobs, plays mechanism sounds, saves to microSD, accepts jobs over Wi-Fi *or* USB serial. Compiled in CI. |
 
 ## 🧭 How it fits together
@@ -112,10 +114,27 @@ curl -X POST -H 'Content-Type: text/plain' --data 'HELLO' http://localhost:8765/
 python3 server/le_spooler_preview.py                     # next job in the queue
 python3 server/le_spooler_preview.py --demo              # overstrike / CR / bell showcase
 python3 server/le_spooler_preview.py --speed teletype --chaos low --ribbon 40
-python3 server/le_spooler_preview.py --anim fish_tank --loops 0     # Ctrl-C to stop
+python3 server/le_spooler_preview.py --anim fish_tank --loops 0     # q to stop
 ```
 
 Or open **`http://<your-box>:8765/`** in a browser.
+
+**Animation controls.** These work in the terminal player, in the web UI (click the
+screen first), and on the CYD by touch:
+
+| Terminal / web | CYD touch | Action |
+|---|---|---|
+| <kbd>space</kbd> | tap while playing / middle | pause · resume |
+| <kbd>←</kbd> <kbd>→</kbd> | left / right third | step one frame back / forward |
+| <kbd>p</kbd> (web: <kbd>P</kbd> or 🖨 button) | top-right **PRINT** | print the current frame onto the paper |
+| <kbd>q</kbd> | top-left **EXIT** | back to the paper |
+
+Or straight from the shell:
+
+```bash
+python3 server/le_spooler_preview.py --anim rocket_launch --frame 7          # show frame 7
+python3 server/le_spooler_preview.py --anim rocket_launch --print-frame 7    # print it
+```
 
 <details>
 <summary><b>Sample terminal output</b></summary>
@@ -145,6 +164,40 @@ character at a time.
 | `--style greenbar\|bluebar\|plain\|thermal` | paper |
 | `--width N` · `--page-lines N` | columns · lines per form (66 = 11″ at 6 LPI) |
 | `--no-color` · `--ascii` · `--lf-only` | plain output · ASCII glyphs · strict line feeds |
+
+## 🖥️ Add it as a printer (desktop apps + Bonjour)
+
+LE SPOOLER ships a CUPS backend (`contrib/cups/lespooler`) and a small PPD. Once
+they're installed, **"LE_SPOOLER"** shows up in the Print dialog of every desktop app
+on the machine: Firefox, LibreOffice, text editors, anything. With `--share`, it's also
+advertised over Bonjour (mDNS/DNS-SD), so Macs, Linux PCs and other machines on the
+LAN discover it on their own.
+
+```bash
+sudo contrib/cups/install-cups-printer.sh            # this machine only
+sudo contrib/cups/install-cups-printer.sh --share    # + discoverable on the LAN
+echo "HELLO FROM CUPS" | lp -d LE_SPOOLER            # test
+lp -d LE_SPOOLER ~/Documents/letter.pdf
+```
+
+How it works: apps send PDF, PostScript or text. CUPS passes the file unfiltered to the
+`lespooler` backend, which converts it to plain text (`pdftotext -layout`, or
+ghostscript for PostScript), turns page breaks into form feeds, and posts the result to
+the spooler. If the spooler is down, CUPS holds the job and retries.
+
+What `--share` changes on your system: it installs `avahi-daemon` if it's missing, and
+runs `cupsctl --share-printers`, so **CUPS listens on port 631 on your LAN**, not just
+localhost. Undo it with `sudo cupsctl --no-share-printers` and
+`sudo contrib/cups/install-cups-printer.sh --uninstall`.
+
+| Client | How to add it |
+|---|---|
+| Linux (GNOME/KDE) | Shows up automatically (cups-browsed / driverless), or add it in Settings › Printers |
+| macOS | System Settings › Printers & Scanners › **+**, pick "LE SPOOLER fanfold printer". If asked for a driver, choose **Generic PostScript Printer**. |
+| Windows | Settings › Printers › Add device › "The printer that I want isn't listed" › by URL: `http://<your-box>:631/printers/LE_SPOOLER`, driver **Generic › Generic / Text Only** (best) or **Microsoft PS Class Driver**. Not an XPS driver: XPS can't be converted. |
+
+> Only text survives: images and scanned PDFs have nothing to print, and the backend
+> says so in the CUPS job log.
 
 ## 📟 Flash the Cheap Yellow Display
 
@@ -226,6 +279,7 @@ docs/roadmap.md                what's next
 notes/                         hardware notes, USB-printer reality check
 tests/                         end-to-end tests (python3 -m unittest discover -s tests)
 install.sh · contrib/          installer, systemd user unit
+contrib/cups/                  CUPS backend, PPD, and printer installer (desktop + Bonjour)
 ```
 
 ## 🧪 Develop

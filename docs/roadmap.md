@@ -18,10 +18,16 @@
 - [ ] Device-side settings menu: chaos level, speed, volume, paper style
 - [ ] Animations stored on SD (`/anim`) and an attract mode when idle
 
-## v1.1: Linux integration
-- [ ] CUPS "raw" queue whose backend is `leprint.py`, so any app can File → Print
-- [ ] Advertise that queue over IPP/mDNS, so other computers discover "LE SPOOLER"
+## v0.3: Linux integration & feel ✅
+- [x] CUPS backend + PPD: any app can File → Print (PDF/PS/text → text, page break → FF)
+- [x] `--share` advertises the queue over Bonjour/IPP so other computers discover it
+- [x] Typewriter look: uneven ink, translucent ribbon, layered overtype (web, CYD, terminal)
+- [x] Period-correct pale greenbar
+- [x] Animations: pause, step, and print any frame (terminal, web, CYD touch)
+
+## v1.1: next
 - [ ] `leprint --serial` auto-detects the CYD's port
+- [ ] AirPrint (iOS) advertising: needs URF/PWG raster input support
 
 ## v1.2: Fun
 - [ ] TurboWarp extension that POSTs to `/print`

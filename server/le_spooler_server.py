@@ -45,7 +45,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-VERSION = "0.2.0"
+VERSION = "0.3.0"
 DEFAULT_HOST = "0.0.0.0"
 DEFAULT_PORT = 8765
 MAX_BODY_BYTES = 1024 * 1024  # 1 MiB is a *lot* of fanfold paper

@@ -257,7 +257,7 @@ def radar_sweep():
 
 def printer_self_test():
     pattern = "".join(chr(c) for c in range(33, 127))
-    lines = ["LE SPOOLER SELF TEST  ROM v0.2", "-" * W]
+    lines = ["LE SPOOLER SELF TEST  ROM v0.3", "-" * W]
     for i in range(8):
         lines.append((pattern[i:] + pattern[:i])[:W])
     lines += ["-" * W, "RIBBON OK  PLATEN OK  BELL *"]

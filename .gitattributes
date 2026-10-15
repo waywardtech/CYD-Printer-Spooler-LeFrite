@@ -8,3 +8,5 @@
 *.ino  text eol=lf
 *.h    text eol=lf
 *.service text eol=lf
+*.ppd  text eol=lf
+contrib/cups/lespooler text eol=lf

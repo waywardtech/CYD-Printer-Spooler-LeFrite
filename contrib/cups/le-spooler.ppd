@@ -28,26 +28,26 @@
 
 *OpenUI *PageSize/Paper: PickOne
 *OrderDependency: 10 AnySetup *PageSize
-*DefaultPageSize: Fanfold
-*PageSize Fanfold/Fanfold 9.5x11in: "<</PageSize[684 792]>>setpagedevice"
+*DefaultPageSize: 9.5x11
+*PageSize 9.5x11/Fanfold 9.5x11in: "<</PageSize[684 792]>>setpagedevice"
 *PageSize Letter/US Letter: "<</PageSize[612 792]>>setpagedevice"
 *PageSize A4/A4: "<</PageSize[595 842]>>setpagedevice"
 *CloseUI: *PageSize
 
 *OpenUI *PageRegion: PickOne
 *OrderDependency: 10 AnySetup *PageRegion
-*DefaultPageRegion: Fanfold
-*PageRegion Fanfold/Fanfold 9.5x11in: "<</PageSize[684 792]>>setpagedevice"
+*DefaultPageRegion: 9.5x11
+*PageRegion 9.5x11/Fanfold 9.5x11in: "<</PageSize[684 792]>>setpagedevice"
 *PageRegion Letter/US Letter: "<</PageSize[612 792]>>setpagedevice"
 *PageRegion A4/A4: "<</PageSize[595 842]>>setpagedevice"
 *CloseUI: *PageRegion
 
-*DefaultImageableArea: Fanfold
-*ImageableArea Fanfold: "36 18 648 774"
+*DefaultImageableArea: 9.5x11
+*ImageableArea 9.5x11: "36 18 648 774"
 *ImageableArea Letter: "18 18 594 774"
 *ImageableArea A4: "18 18 577 824"
-*DefaultPaperDimension: Fanfold
-*PaperDimension Fanfold: "684 792"
+*DefaultPaperDimension: 9.5x11
+*PaperDimension 9.5x11: "684 792"
 *PaperDimension Letter: "612 792"
 *PaperDimension A4: "595 842"
 

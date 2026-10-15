@@ -47,7 +47,7 @@ say "Creating print queue $QUEUE"
   -D "LE SPOOLER fanfold printer" \
   -L "$(hostname)" \
   -o printer-error-policy=retry-job \
-  -o media=Fanfold
+  -o media=9.5x11
 /usr/sbin/cupsenable "$QUEUE"
 /usr/sbin/cupsaccept "$QUEUE"
 
