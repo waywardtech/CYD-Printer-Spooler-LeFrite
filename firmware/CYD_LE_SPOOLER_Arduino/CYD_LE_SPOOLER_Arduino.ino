@@ -18,9 +18,9 @@
 //    * @LE_SPOOLER envelopes over USB serial, answered with @ACK <id>
 //
 //  Before flashing:
-//    1. copy config.example.h -> config.h and fill it in
+//    1. copy config.example.h -> spooler_config.h and fill it in
 //    2. build with ../build.sh (passes the TFT_eSPI pin config as flags)
-//    3. verify every pin marked UNVERIFIED in config.h against your board
+//    3. verify every pin marked UNVERIFIED in spooler_config.h against your board
 //
 //  Libraries (Arduino Library Manager):
 //    TFT_eSPI (Bodmer), ArduinoJson (v7, Benoit Blanchon)
@@ -37,10 +37,10 @@
 #include <TFT_eSPI.h>
 #include <ArduinoJson.h>
 
-#if __has_include("config.h")
-  #include "config.h"
+#if __has_include("spooler_config.h")
+  #include "spooler_config.h"
 #else
-  #warning "config.h not found - using config.example.h. Copy it to config.h and edit!"
+  #warning "spooler_config.h not found - using config.example.h. Copy it to spooler_config.h and edit!"
   #include "config.example.h"
 #endif
 
@@ -408,7 +408,7 @@ static String envelopeHeader(const String &text, const String &key) {
   return text.substring(p + needle.length(), e);
 }
 
-// Touch (bit-banged XPT2046 by default - see config.h)
+// Touch (bit-banged XPT2046 by default - see spooler_config.h)
 static uint16_t xptRead(uint8_t cmd) {
 #if !TOUCH_USE_LIBRARY
   digitalWrite(TOUCH_CS, LOW);

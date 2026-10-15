@@ -203,8 +203,8 @@ localhost. Undo it with `sudo cupsctl --no-share-printers` and
 
 ```bash
 # one-time: arduino-cli + ESP32 core + libraries (see firmware/README.md)
-cp firmware/CYD_LE_SPOOLER_Arduino/config.example.h firmware/CYD_LE_SPOOLER_Arduino/config.h
-nano firmware/CYD_LE_SPOOLER_Arduino/config.h      # Wi-Fi + spooler URL
+cp firmware/CYD_LE_SPOOLER_Arduino/config.example.h firmware/CYD_LE_SPOOLER_Arduino/spooler_config.h
+nano firmware/CYD_LE_SPOOLER_Arduino/spooler_config.h      # Wi-Fi + spooler URL
 UPLOAD_PORT=/dev/ttyUSB0 firmware/build.sh         # PANEL=ST7789_DRIVER for 2-USB boards
 ```
 

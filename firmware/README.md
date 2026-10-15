@@ -17,8 +17,8 @@ arduino-cli core install esp32:esp32@2.0.17
 arduino-cli lib install TFT_eSPI ArduinoJson XPT2046_Touchscreen
 
 # configure
-cp firmware/CYD_LE_SPOOLER_Arduino/config.example.h firmware/CYD_LE_SPOOLER_Arduino/config.h
-$EDITOR firmware/CYD_LE_SPOOLER_Arduino/config.h        # Wi-Fi, spooler URL
+cp firmware/CYD_LE_SPOOLER_Arduino/config.example.h firmware/CYD_LE_SPOOLER_Arduino/spooler_config.h
+$EDITOR firmware/CYD_LE_SPOOLER_Arduino/spooler_config.h        # Wi-Fi, spooler URL
 
 # compile, then compile + flash
 firmware/build.sh
@@ -54,7 +54,7 @@ Some CYDs need **BOOT** held while flashing starts.
 
 ## Open questions for bring-up
 - Panel: ILI9341 or ST7789? Rotation and colour inversion?
-- Touch calibration constants (`TOUCH_X_MIN` …) in `config.h`
+- Touch calibration constants (`TOUCH_X_MIN` …) in `spooler_config.h`
 - Is a speaker connected to the SPEAK header?
 - Full redraw per line feed may flicker. Hardware scroll is the next step.
 

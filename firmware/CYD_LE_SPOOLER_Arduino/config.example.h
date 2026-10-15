@@ -1,8 +1,8 @@
 // ============================================================================
 //  LE SPOOLER - CYD firmware configuration
 //
-//  Copy this file to  config.h  (same folder) and edit it.
-//  config.h is git-ignored because it holds your Wi-Fi password.
+//  Copy this file to  spooler_config.h  (same folder) and edit it.
+//  spooler_config.h is git-ignored because it holds your Wi-Fi password.
 //
 //  WARNING: PIN VALUES ARE UNVERIFIED. They are the values commonly published for
 //      the ESP32-2432S028R "Cheap Yellow Display" (1x micro-USB, ILI9341).

@@ -18,7 +18,7 @@ notes/*.log
 notes/*.pid
 
 # Firmware secrets & build output
-firmware/CYD_LE_SPOOLER_Arduino/config.h
+firmware/CYD_LE_SPOOLER_Arduino/spooler_config.h
 firmware/**/build/
 
 # Editors / OS

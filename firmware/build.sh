@@ -40,8 +40,8 @@ if [[ "$PANEL" == "ST7789_DRIVER" ]]; then
 fi
 FLAGS="${TFT_FLAGS[*]} ${EXTRA_FLAGS:-}"
 
-if [[ ! -f "$SKETCH/config.h" ]]; then
-  echo "note: $SKETCH/config.h not found; building with config.example.h placeholders" >&2
+if [[ ! -f "$SKETCH/spooler_config.h" ]]; then
+  echo "note: $SKETCH/spooler_config.h not found; building with config.example.h placeholders" >&2
 fi
 
 arduino-cli compile \
