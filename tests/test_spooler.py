@@ -174,6 +174,21 @@ class SpoolerTest(unittest.TestCase):
         _, job = http("GET", f"{self.base}/jobs/{out.stdout.strip()}")
         self.assertEqual(job["job"]["body"], "cafe\b'\n")
 
+    def test_preview_shows_and_prints_one_animation_frame(self):
+        preview = [sys.executable, str(ROOT / "server" / "le_spooler_preview.py"), "--anim", "robot_wave"]
+        env = dict(os.environ, PYTHONIOENCODING="utf-8")
+        out = subprocess.run(preview + ["--frame", "1", "--ascii"], capture_output=True, text=True, encoding="utf-8", check=True, env=env)
+        self.assertIn("[o_o]/", out.stdout)
+        self.assertIn("1/20", out.stdout)
+        out = subprocess.run(preview + ["--print-frame", "2", "--server", self.base],
+                             capture_output=True, text=True, encoding="utf-8", check=True, env=env)
+        jid = out.stdout.strip().split()[-1]
+        _, job = http("GET", f"{self.base}/jobs/{jid}")
+        self.assertEqual(job["job"]["title"], "Robot Wave - frame 2/20")
+        self.assertIn("[o_o]-", job["job"]["body"])
+        bad = subprocess.run(preview + ["--frame", "999"], capture_output=True, text=True, encoding="utf-8", env=env)
+        self.assertNotEqual(bad.returncode, 0)
+
     def test_cli_reports_unreachable_server(self):
         out = subprocess.run([sys.executable, str(ROOT / "cli" / "leprint.py"),
                               "--server", "http://127.0.0.1:9", "hi"], capture_output=True, text=True)

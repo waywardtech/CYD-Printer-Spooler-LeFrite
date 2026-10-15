@@ -4,15 +4,20 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>LE SPOOLER</title>
+<!-- Typewriter faces (SIL OFL). Without internet the page falls back to Courier. -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Courier+Prime&family=Special+Elite&display=swap" rel="stylesheet">
 <style>
   :root {
-    --bg: #1d1f1c; --panel: #262924; --ink: #e9e6d8; --muted: #9a9d90; --accent: #9bd17c;
-    --green: #cfe9cd; --cream: #fbf9ea; --strip: #f3f2ea; --hole: #3a3a3a; --perf: #a9a9a0;
-    --type: #1a1a1a; --warn: #e7a34b; --line: 18px;
+    --bg: #1d1f1c; --panel: #262924; --ink-ui: #e9e6d8; --muted: #9a9d90; --accent: #9bd17c;
+    /* Period greenbar: a pale, slightly grey mint on warm white stock */
+    --green: #e1efd9; --cream: #fbfaf1; --strip: #f7f6ef; --hole: #2f302d; --perf: #b9b9ae;
+    --warn: #e7a34b; --line: 20px;
+    --type: "Special Elite", "Courier Prime", "Courier New", ui-monospace, monospace;
     --mono: "Courier Prime", "Courier New", ui-monospace, Menlo, Consolas, monospace;
   }
   * { box-sizing: border-box; }
-  body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.45 system-ui, sans-serif; }
+  body { margin: 0; background: var(--bg); color: var(--ink-ui); font: 15px/1.45 system-ui, sans-serif; }
   header { padding: 18px 16px 6px; display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; }
   header h1 { font: 700 26px/1 var(--mono); letter-spacing: .12em; margin: 0; color: var(--accent); }
   header .tag { color: var(--muted); }
@@ -20,7 +25,7 @@
   #status.ok::before { content: "● "; color: var(--accent); }
   #status.bad::before { content: "● "; color: #e05d5d; }
   main { display: grid; grid-template-columns: minmax(0, 380px) minmax(0, 1fr); gap: 16px; padding: 12px 16px 32px; }
-  @media (max-width: 860px) { main { grid-template-columns: 1fr; } }
+  @media (max-width: 860px) { main { grid-template-columns: minmax(0, 1fr); } }
   section { background: var(--panel); border-radius: 10px; padding: 14px; }
   h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .1em; color: var(--muted); margin: 0 0 10px; }
   label { display: block; font-size: 13px; color: var(--muted); margin: 8px 0 4px; }
@@ -32,11 +37,14 @@
   button { background: #343830; border: 1px solid #4a4f45; border-radius: 6px; padding: 7px 12px; cursor: pointer; }
   button:hover { border-color: var(--accent); }
   button.primary { background: var(--accent); color: #142010; border: 0; font-weight: 700; }
+  button:disabled { opacity: .45; cursor: default; }
   .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
   .chips button { font: 12px var(--mono); padding: 3px 8px; }
   .check { display: flex; align-items: center; gap: 8px; margin-top: 8px; font-size: 13px; color: var(--muted); }
   .check input { width: auto; }
-  #msg { min-height: 1.4em; margin-top: 8px; font-size: 13px; }
+  .check label { margin: 0; }
+  #msg, #animmsg { min-height: 1.4em; margin-top: 8px; font-size: 13px; }
+  #animmsg, #paperinfo { white-space: normal; }
   table { width: 100%; border-collapse: collapse; font-size: 13px; }
   td, th { padding: 5px 6px; border-bottom: 1px solid #33372f; text-align: left; vertical-align: top; }
   th { color: var(--muted); font-weight: 500; }
@@ -49,25 +57,31 @@
   #queuebox { max-height: 300px; overflow: auto; }
 
   /* ---- fanfold paper ---- */
-  #paperwrap { overflow-x: auto; background: #151614; border-radius: 8px; padding: 10px 0; margin-top: 10px; }
-  #paper { margin: 0 auto; width: max-content; font: 15px/var(--line) var(--mono); color: var(--type); }
+  #paperwrap { overflow: auto; max-height: 70vh; background: #151614; border-radius: 8px; padding: 10px 0; margin-top: 10px; }
+  #paper { margin: 0 auto; width: max-content; font: 17px/var(--line) var(--type); }
   .pl { display: flex; height: var(--line); }
-  .strip { width: 34px; background: var(--strip); position: relative; }
-  .strip.l { border-right: 2px dotted var(--perf); }
-  .strip.r { border-left: 2px dotted var(--perf); }
-  .hole::after { content: ""; position: absolute; top: 4px; left: 11px; width: 11px; height: 11px; border-radius: 50%; background: var(--hole); }
-  .page { padding: 0 14px; white-space: pre; background: var(--cream); }
+  .strip { width: 36px; background: var(--strip); position: relative; }
+  .strip.l { border-right: 1px dashed var(--perf); }
+  .strip.r { border-left: 1px dashed var(--perf); }
+  .hole::after { content: ""; position: absolute; top: 4px; left: 12px; width: 12px; height: 12px; border-radius: 50%;
+                 background: var(--hole); box-shadow: inset 0 1px 2px #000; }
+  .page { padding: 0 16px; white-space: pre; background: var(--cream); }
   .pl.a .page { background: var(--green); }
-  .pl.fold { border-top: 1px dashed #8a8a80; }
-  .page span { display: inline-block; width: 1ch; text-align: center; }
-  .page .b { font-weight: 700; }
-  .page .u { text-decoration: underline; }
-  .page .s { text-decoration: line-through; }
-  .page .head { box-shadow: inset 0 -3px 0 #e36b2c; }
+  .pl.fold { border-top: 1px dashed #9a9a90; }
+  /* One cell per column; every strike adds a glyph layer, so overtype is literal */
+  .c { display: inline-block; width: 1ch; height: var(--line); position: relative; vertical-align: top; }
+  .g { position: absolute; left: 0; top: 0; width: 1ch; text-align: center; line-height: var(--line);
+       mix-blend-mode: multiply;                                        /* overlapping ink darkens */
+       text-shadow: 0 0 .6px currentColor, .25px .35px .4px rgba(0,0,0,.18); /* bleed + imprint */ }
+  .c.head::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 3px; background: #e36b2c; }
   .note { color: var(--warn); font: 12px var(--mono); padding-left: 8px; align-self: center; white-space: nowrap; }
   .controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
   .controls select, .controls input { width: auto; }
+  .controls label { margin: 0; }
   #screen { font: 14px/1.15 var(--mono); color: #79f27a; background: #050805; border-radius: 8px; padding: 14px; white-space: pre; min-height: 15em; overflow-x: auto; margin-top: 10px; text-shadow: 0 0 6px rgba(121,242,122,.5); }
+  #screen.paused { color: #c9f2b6; }
+  #framepos { font: 13px var(--mono); color: var(--muted); min-width: 7em; }
+  kbd { font: 11px var(--mono); border: 1px solid #555; border-radius: 3px; padding: 0 4px; }
   footer { color: var(--muted); font-size: 12px; padding: 0 16px 24px; }
   a { color: var(--accent); }
 </style>
@@ -95,8 +109,9 @@
         <textarea id="body" spellcheck="false">HELLO ELLIS
 
 THIS IS YOUR FIRST DOCUMENT.
-Accents the old way: cafe\b' garc\b,on man\b~ana\a</textarea>
-        <div class="check"><input type="checkbox" id="esc" checked><label for="esc" style="margin:0">interpret <code>\b \r \f \a \t</code> escapes</label></div>
+Accents the old way: cafe\b' garc\b,on man\b~ana\a
+Bold: B\bBO\bOL\bLD\bD   Underline: U\b_N\b_D\b_E\b_R\b_</textarea>
+        <div class="check"><input type="checkbox" id="esc" checked><label for="esc">interpret <code>\b \r \f \a \t</code> escapes</label></div>
         <div class="chips" aria-label="insert control characters">
           <button type="button" data-ins="\b">BS \b</button>
           <button type="button" data-ins="\r">CR \r</button>
@@ -123,27 +138,39 @@ Accents the old way: cafe\b' garc\b,on man\b~ana\a</textarea>
     <section>
       <h2>Paper</h2>
       <div class="controls">
-        <label for="speed" style="margin:0">Speed</label>
+        <label for="speed">Speed</label>
         <select id="speed"><option value="10">teletype (10 cps)</option><option value="30" selected>daisywheel (30 cps)</option><option value="250">fast</option><option value="0">instant</option></select>
-        <label for="cols" style="margin:0">Columns</label>
+        <label for="cols">Columns</label>
         <input id="cols" type="number" min="20" max="132" value="64" style="width:5em">
-        <span id="paperinfo" class="id"></span>
+        <label for="font">Type</label>
+        <select id="font">
+          <option value='"Special Elite", "Courier New", monospace'>worn typewriter</option>
+          <option value='"Courier Prime", "Courier New", monospace'>clean daisywheel</option>
+          <option value='"Courier New", Courier, monospace'>Courier</option>
+        </select>
+        <span class="check" style="margin:0"><input type="checkbox" id="compose"><label for="compose">clean accents (compose é)</label></span>
       </div>
       <div id="paperwrap"><div id="paper"></div></div>
+      <div id="paperinfo" class="id" style="margin-top:6px"></div>
     </section>
     <section style="margin-top:16px">
       <h2>Animation screen</h2>
       <div class="controls">
         <select id="anim"></select>
-        <button type="button" id="playBtn">Play</button>
-        <button type="button" id="stopBtn">Stop</button>
+        <button type="button" id="playBtn" title="Play / pause (space)">▶ Play</button>
+        <button type="button" id="prevBtn" title="Previous frame (←)" disabled>◀ step</button>
+        <button type="button" id="nextBtn" title="Next frame (→)" disabled>step ▶</button>
+        <span id="framepos"></span>
+        <button type="button" id="printFrameBtn" title="Print the current frame on the paper (P)" disabled>🖨 Print frame</button>
       </div>
-      <div id="screen">select an animation…</div>
+      <div id="screen" tabindex="0">select an animation and press Play…</div>
+      <div id="animmsg" class="id"><kbd>space</kbd> play/pause · <kbd>←</kbd><kbd>→</kbd> step · <kbd>P</kbd> print frame (click the screen first)</div>
     </section>
   </div>
 </main>
-<footer>The paper preview here is the same mechanism the CYD runs: overstrike composes accents,
-CR overprints, FF feeds to the next form. API: <a href="/health">/health</a> · <a href="/jobs">/jobs</a> · <a href="/animations">/animations</a></footer>
+<footer>The paper preview runs the same mechanism as the CYD: every strike adds ink, so
+backspace + accent really overtypes, CR overprints, and FF feeds to the next form.
+API: <a href="/health">/health</a> · <a href="/jobs">/jobs</a> · <a href="/animations">/animations</a></footer>
 
 <script>
 "use strict";
@@ -159,10 +186,10 @@ document.querySelectorAll("[data-ins]").forEach((b) => b.addEventListener("click
   const t = $("body"), s = t.selectionStart;
   t.setRangeText(b.dataset.ins, s, t.selectionEnd, "end"); t.focus();
 }));
+$("font").onchange = () => $("paper").style.setProperty("--type", $("font").value);
 
 // ---------- printer mechanism (mirror of le_spooler_preview.py) ----------
-const ACCENTS = { "'": "́", "`": "̀", "^": "̂", "~": "̃", ",": "̧", '"': "̈" };
-const PAIRS = { "O/": "Ø", "o/": "ø", "0/": "Ø", "c|": "¢", "=/": "≠", "L-": "£", "Y=": "¥", ":-": "÷", "+_": "±" };
+const ACCENTS = { "'": "\u0301", "`": "\u0300", "^": "\u0302", "~": "\u0303", ",": "\u0327", '"': "\u0308" };
 function compose(a, b) {
   for (const [base, acc] of [[a, b], [b, a]]) {
     if (ACCENTS[acc] && /\p{L}/u.test(base)) {
@@ -170,19 +197,37 @@ function compose(a, b) {
       if ([...c].length === 1) return c;
     }
   }
-  return PAIRS[a + b] || PAIRS[b + a] || null;
+  return null;
 }
 const CHAOS = { off: [0, 0, 0], low: [1/6000, 1/600, .004], medium: [1/1500, 1/150, .02], high: [1/300, 1/40, .08] };
+const PAPER = { greenbar: "#e1efd9", bluebar: "#e2e8f6", plain: "#fbfaf1", thermal: "#ffffff" };
 const FORM = 66;
 let run = 0;
+
+// One strike of the type element: ink amount, ribbon tone, hammer wobble all vary a little.
+function inkGlyph(ch, ribbon, miss) {
+  const g = document.createElement("span");
+  g.className = "g";
+  g.textContent = ch;
+  const fade = (100 - ribbon) / 100;                         // 0 = fresh ribbon
+  const strike = 0.78 + Math.random() * 0.2 - fade * 0.45;   // uneven hammer pressure
+  const tone = Math.round(18 + Math.random() * 14 + fade * 70);
+  g.style.color = `rgba(${tone}, ${tone}, ${tone + 10}, ${Math.max(0.18, strike).toFixed(2)})`;
+  const dx = (Math.random() - 0.5) * 0.7, dy = (Math.random() - 0.5) * 0.7 + (miss ? 2.5 : 0);
+  const rot = (Math.random() - 0.5) * 1.6 + (miss ? 7 : 0);
+  g.style.transform = `translate(${dx.toFixed(2)}px, ${dy.toFixed(2)}px) rotate(${rot.toFixed(1)}deg)`;
+  if (Math.random() < 0.12) g.style.filter = "blur(.25px)";  // a little ribbon fuzz now and then
+  return g;
+}
 
 async function printOnPaper(text, opts) {
   const my = ++run, paper = $("paper"), cols = Math.max(20, Math.min(132, +$("cols").value || 64));
   const cps = +$("speed").value, [pJam, pMiss, wear] = CHAOS[opts.chaos] || CHAOS.off;
-  const green = opts.style === "bluebar" ? "#d6dcf5" : opts.style === "plain" ? "var(--cream)" : opts.style === "thermal" ? "#fff" : "var(--green)";
-  paper.style.setProperty("--green", green);
+  const composeMode = $("compose").checked;
+  paper.style.setProperty("--green", PAPER[opts.style] || PAPER.greenbar);
   paper.innerHTML = "";
-  let line = 0, col = 0, ribbon = 100, row, cells, events = { bell: 0, overstrike: 0, jam: 0, misstrike: 0 };
+  let line = 0, col = 0, ribbon = 100, row, cells;
+  const events = { bell: 0, overstrike: 0, jam: 0, misstrike: 0 };
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
   function newRow() {
@@ -193,7 +238,7 @@ async function printOnPaper(text, opts) {
     row.innerHTML = `<div class="strip l${hole}"></div><div class="page"></div><div class="strip r${hole}"></div><div class="note"></div>`;
     cells = [];
     const pg = row.children[1];
-    for (let i = 0; i < cols; i++) { const s = document.createElement("span"); s.textContent = " "; pg.appendChild(s); cells.push(s); }
+    for (let i = 0; i < cols; i++) { const s = document.createElement("span"); s.className = "c"; pg.appendChild(s); cells.push(s); }
     paper.appendChild(row);
     row.scrollIntoView({ block: "nearest" });
   }
@@ -213,22 +258,15 @@ async function printOnPaper(text, opts) {
     if (ch < " ") continue;
     if (col >= cols) lineFeed();
     if (pJam && Math.random() < pJam) { events.jam++; note("** PAPER JAM **"); await sleep(cps ? 1200 : 0); }
-    const cell = cells[col], cur = cell.textContent;
     if (ch !== " ") {
-      if (cur === " ") cell.textContent = ch;
-      else {
-        events.overstrike++;
-        const c = compose(cur, ch);
-        if (ch === cur) cell.classList.add("b");
-        else if (ch === "_") cell.classList.add("u");
-        else if (cur === "_") { cell.textContent = ch; cell.classList.add("u"); }
-        else if (c) cell.textContent = c;
-        else if (ch === "-" || cur === "-") { if (cur === "-") cell.textContent = ch; cell.classList.add("s"); }
-        else { cell.textContent = ch; cell.classList.add("b"); }
-      }
-      const fade = Math.round((100 - ribbon) * 1.5);
-      cell.style.color = `rgb(${fade},${fade},${fade + 8})`;
-      if (pMiss && Math.random() < pMiss) { events.misstrike++; cell.style.transform = "translateY(2px) rotate(6deg)"; }
+      const cell = cells[col], layers = cell.querySelectorAll(".g");
+      const miss = pMiss && Math.random() < pMiss;
+      if (miss) events.misstrike++;
+      if (layers.length) events.overstrike++;
+      const prev = layers.length ? layers[layers.length - 1].textContent : null;
+      const composed = composeMode && prev ? compose(prev, ch) : null;
+      if (composed) layers[layers.length - 1].textContent = composed;   // tidy mode
+      else cell.appendChild(inkGlyph(ch, ribbon, miss));                 // real overtype
       ribbon = Math.max(0, ribbon - wear);
     }
     col++; head();
@@ -245,14 +283,17 @@ function currentJob() {
   return { title: $("title").value || "Untitled", source: "web", style: $("style").value, chaos: $("chaos").value,
            mode: "print", body: ($("esc").checked ? decodeEscapes(raw) : raw).replace(/\n?$/, "\n") };
 }
+async function queueJob(j) {
+  const r = await api("/print", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(j) });
+  if (r.ok) { refresh(); printOnPaper(j.body, j); }
+  return r;
+}
 $("previewBtn").onclick = () => { const j = currentJob(); printOnPaper(j.body, j); };
 $("form").onsubmit = async (e) => {
   e.preventDefault();
-  const j = currentJob();
   try {
-    const r = await api("/print", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(j) });
+    const r = await queueJob(currentJob());
     $("msg").textContent = r.ok ? `queued ${r.id}` : `error: ${r.error}`;
-    if (r.ok) { refresh(); printOnPaper(j.body, j); }
   } catch (err) { $("msg").textContent = "cannot reach spooler"; }
 };
 
@@ -267,9 +308,11 @@ async function refresh() {
     for (const j of jobs.slice().reverse()) {
       const tr = document.createElement("tr");
       tr.className = "job";
-      tr.innerHTML = `<td class="id"></td><td></td><td><span class="pill ${j.status}">${j.status}</span></td>`;
+      tr.innerHTML = `<td class="id"></td><td></td><td><span class="pill"></span></td>`;
       tr.children[0].textContent = j.id.slice(9);
       tr.children[1].textContent = j.title;
+      tr.querySelector(".pill").textContent = j.status;
+      tr.querySelector(".pill").classList.add(j.status);
       tr.title = `${j.id} · ${j.chars} chars · from ${j.source}`;
       tr.onclick = async () => { const r = await api(`/jobs/${j.id}`); printOnPaper(r.job.body, r.job); };
       $("queue").appendChild(tr);
@@ -277,27 +320,76 @@ async function refresh() {
   } catch (e) { $("status").className = "bad"; $("status").textContent = "spooler offline"; }
 }
 
-// ---------- animations ----------
-let animTimer = null;
+// ---------- animations: play / pause / step / print a frame ----------
+const anim = { data: null, i: 0, timer: null };
 async function loadAnims() {
   const { animations } = await api("/animations");
-  $("anim").innerHTML = animations.map((a) => `<option value="${a.id}">${a.name} (${a.frame_count}f)</option>`).join("");
+  const sel = $("anim");
+  sel.innerHTML = "";
+  for (const a of animations) {
+    const o = document.createElement("option");
+    o.value = a.id; o.textContent = `${a.name} (${a.frame_count}f)`;
+    sel.appendChild(o);
+  }
 }
-$("playBtn").onclick = async () => {
-  clearInterval(animTimer);
-  const { animation: a } = await api(`/animations/${$("anim").value}`);
-  let i = 0;
-  const show = () => {
-    $("screen").textContent = a.frames[i].join("\n") + "\n".repeat(Math.max(0, a.height - a.frames[i].length));
-    i++;
-    if (i >= a.frames.length) { if (a.loop) i = 0; else clearInterval(animTimer); }
-  };
-  show();
-  animTimer = setInterval(show, 1000 / a.fps);
+function showFrame() {
+  const a = anim.data;
+  const f = a.frames[anim.i];
+  $("screen").textContent = f.join("\n") + "\n".repeat(Math.max(0, a.height - f.length));
+  $("framepos").textContent = `frame ${anim.i + 1}/${a.frames.length}`;
+}
+function setPlaying(on) {
+  clearInterval(anim.timer);
+  anim.timer = null;
+  if (on) {
+    anim.timer = setInterval(() => {
+      const a = anim.data;
+      if (anim.i + 1 >= a.frames.length && !a.loop) return setPlaying(false);
+      anim.i = (anim.i + 1) % a.frames.length;
+      showFrame();
+    }, 1000 / anim.data.fps);
+  }
+  $("playBtn").textContent = on ? "❚❚ Pause" : "▶ Play";
+  $("screen").classList.toggle("paused", !on);
+  for (const id of ["prevBtn", "nextBtn", "printFrameBtn"]) $(id).disabled = !anim.data;
+}
+function step(d) {
+  if (!anim.data) return;
+  setPlaying(false);
+  anim.i = (anim.i + d + anim.data.frames.length) % anim.data.frames.length;
+  showFrame();
+}
+async function ensureAnim() {
+  if (!anim.data || anim.data.id !== $("anim").value) {
+    const { animation } = await api(`/animations/${$("anim").value}`);
+    anim.data = { ...animation, id: $("anim").value };
+    anim.i = 0;
+    showFrame();
+  }
+}
+$("anim").onchange = async () => { setPlaying(false); anim.data = null; await ensureAnim(); setPlaying(false); };
+$("playBtn").onclick = async () => { await ensureAnim(); setPlaying(!anim.timer); };
+$("prevBtn").onclick = () => step(-1);
+$("nextBtn").onclick = () => step(1);
+$("printFrameBtn").onclick = async () => {
+  if (!anim.data) return;
+  setPlaying(false);
+  const a = anim.data, n = anim.i + 1;
+  const job = { title: `${a.name} - frame ${n}/${a.frames.length}`, source: "web", style: $("style").value,
+                chaos: "off", mode: "print", body: a.frames[anim.i].join("\n") + "\n" };
+  try {
+    const r = await queueJob(job);
+    $("animmsg").textContent = r.ok ? `queued frame ${n} as ${r.id}` : `error: ${r.error}`;
+  } catch (e) { $("animmsg").textContent = "cannot reach spooler"; }
 };
-$("stopBtn").onclick = () => clearInterval(animTimer);
+$("screen").addEventListener("keydown", (e) => {
+  if (e.key === " ") { e.preventDefault(); $("playBtn").click(); }
+  else if (e.key === "ArrowLeft") step(-1);
+  else if (e.key === "ArrowRight") step(1);
+  else if (e.key === "p" || e.key === "P") $("printFrameBtn").click();
+});
 
-refresh(); loadAnims().catch(() => {});
+refresh(); loadAnims().then(ensureAnim).catch(() => {});
 setInterval(refresh, 5000);
 </script>
 </body>

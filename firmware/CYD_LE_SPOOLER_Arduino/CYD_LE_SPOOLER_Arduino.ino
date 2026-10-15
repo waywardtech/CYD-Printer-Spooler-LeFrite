@@ -77,6 +77,8 @@ struct Cell {
   char    a;      // first glyph struck in this cell (0 = blank)
   char    b;      // second glyph (overstrike), 0 if none
   uint8_t ink;    // ribbon % when struck (for fading)
+  int8_t  toneA;  // per-strike ink variation of each glyph
+  int8_t  toneB;
 };
 
 // Ring buffer of the lines currently visible on screen. Index with rowSlot().
@@ -121,10 +123,30 @@ static int  rowY(int row)        { return PAPER_Y0 + row * LINE_H; }
 static long lineAtRow(int row)   { return paperLine - (HEAD_ROW - row); }
 static int  colX(int col)        { return TEXT_X0 + col * CHAR_W; }
 
-static uint16_t inkColor(uint8_t ink) {
-  // 100% -> near black, 0% -> pale grey. Old ribbons fade, they don't vanish.
-  int v = (100 - ink) * 170 / 100;
-  return tft.color565(v, v, v + 10 > 255 ? 255 : v + 10);
+// Blue-black ribbon ink. 100% -> near black, 0% -> pale grey (old ribbons fade,
+// they don't vanish). `tone` is the per-strike hammer-pressure variation.
+static uint16_t inkColor(uint8_t ink, int tone = 0) {
+  int v = constrain(22 + tone + (100 - ink) * 165 / 100, 0, 215);
+  return tft.color565(v, v, min(255, v + 12));
+}
+
+static uint16_t paperColor(long line) {
+  return ((formLine(line) / BAND_LINES) % 2) == 0 ? C_GREEN : C_CREAM;
+}
+
+// One hammer strike of type onto paper: transparent background (so overtype
+// really layers ink), uneven ink, and a couple of tiny dropouts where the
+// typeface didn't quite bite. Dropouts come from a hash of the cell, so a
+// glyph looks the same every time the paper is redrawn.
+static void stampGlyph(int x, int y, char c, uint8_t ink, int tone, uint16_t paper, uint32_t seed) {
+  uint16_t col = inkColor(ink, tone);
+  tft.drawChar(x, y, c, col, col, 1);                // fg == bg -> transparent background
+  uint32_t h = seed * 2654435761u;
+  int drops = (h >> 29) % 3;                         // 0..2 dropouts
+  for (int i = 0; i < drops; i++) {
+    h = h * 1103515245u + 12345u;
+    tft.drawPixel(x + (h >> 16) % 5, y + (h >> 8) % 7, paper);
+  }
 }
 
 static void setLed(bool r, bool g, bool b) {    // active LOW
@@ -177,16 +199,15 @@ void drawPerforations(int row, long line) {
 static void drawRow(int row) {
   long line  = lineAtRow(row);
   int  y     = rowY(row);
-  bool bandA = ((formLine(line) / BAND_LINES) % 2) == 0;
-  tft.fillRect(STRIP_W + 1, y, PERF_R_X - STRIP_W - 1, LINE_H, bandA ? C_GREEN : C_CREAM);
+  uint16_t paper = paperColor(line);
+  tft.fillRect(STRIP_W + 1, y, PERF_R_X - STRIP_W - 1, LINE_H, paper);
   drawSprocketHoles(row, line);
   drawPerforations(row, line);
   Cell *cells = lines[rowSlot(line)];
   for (int c = 0; c < COLS; c++) {
-    uint16_t ink = inkColor(cells[c].ink);
-    // fg == bg means "transparent background" in TFT_eSPI: that's our overstrike
-    if (cells[c].a) tft.drawChar(colX(c), y + 1, cells[c].a, ink, ink, 1);
-    if (cells[c].b) tft.drawChar(colX(c), y + 1, cells[c].b, ink, ink, 1);
+    uint32_t seed = (uint32_t)line * 977u + c * 131u;
+    if (cells[c].a) stampGlyph(colX(c), y + 1, cells[c].a, cells[c].ink, cells[c].toneA, paper, seed);
+    if (cells[c].b) stampGlyph(colX(c), y + 1, cells[c].b, cells[c].ink, cells[c].toneB, paper, seed + 7);
   }
 }
 
@@ -312,18 +333,20 @@ void printCharacter(char c) {
 
   Cell &cell = lines[rowSlot(paperLine)][headCol];
   if (c != ' ') {
-    if (!cell.a) { cell.a = c; cell.ink = (uint8_t)ribbonPct; }
-    else         { cell.b = c; }                    // overstrike: both glyphs get drawn
+    int tone = random(-12, 22);                     // uneven hammer pressure
+    bool second = cell.a != 0;
+    if (!second) { cell.a = c; cell.ink = (uint8_t)ribbonPct; cell.toneA = tone; }
+    else         { cell.b = c; cell.toneB = tone; } // overstrike: both glyphs stay inked
 
     // Misstrike (chaos): nudge the glyph by one pixel, as a skewed hammer would
     int nudge = (chaosLevel > 0 && random(600 / chaosLevel) == 0) ? 1 : 0;
 
     // Draw ONLY the new glyph, transparently, on top of whatever is there.
     // That is exactly what a daisywheel does, so accents come out naturally.
-    uint16_t ink = inkColor((uint8_t)ribbonPct);
     int y = rowY(HEAD_ROW) + 1 + nudge;
-    if (cell.b == c && strchr("'`^~\"", c)) y -= 1; // lift accents 1 px over letters
-    tft.drawChar(colX(headCol), y, c, ink, ink, 1);
+    if (second && strchr("'`^~\"", c)) y -= 1;      // lift accents 1 px over letters
+    uint32_t seed = (uint32_t)paperLine * 977u + headCol * 131u + (second ? 7 : 0);
+    stampGlyph(colX(headCol), y, c, (uint8_t)ribbonPct, tone, paperColor(paperLine), seed);
 
     playClick();
     if (chaosLevel > 0) ribbonPct = max(0.0f, ribbonPct - 0.004f * chaosLevel);
@@ -464,37 +487,120 @@ void browseDocuments() {
 //  ASCII animation player (fixed screen, separate from paper mode)
 //  animText is a whole .anim file (docs/protocol.md section 3).
 // ============================================================================
+//
+//  Touch controls:
+//    while playing:  tap anywhere            -> pause
+//    while paused:   left third  (◀)         -> previous frame
+//                    middle      (▶/❚❚)      -> resume
+//                    right third (▶)         -> next frame
+//                    top bar, left  (EXIT)  -> back to the paper
+//                    top bar, right (PRINT) -> print this frame onto the paper
+//  It plays ANIM_LOOPS times untouched, then returns to the paper by itself.
+// ============================================================================
+static const int MAX_FRAMES = 200;
+static const int ANIM_LOOPS = 3;
+static const int ANIM_X0 = (SCREEN_W - 32 * CHAR_W) / 2, ANIM_Y0 = 60;
+static const int BAR_H = 36;                         // touch bars top and bottom
+
+static void waitForRelease() {
+  int x, y;
+  while (readTouch(x, y)) delay(15);
+  delay(40);
+}
+
+static void drawAnimChrome(int i, int n, bool paused) {
+  tft.fillRect(0, 0, SCREEN_W, BAR_H, TFT_DARKGREY);
+  tft.setTextColor(TFT_WHITE, TFT_DARKGREY);
+  tft.setCursor(6, 14);  tft.print("< EXIT");
+  tft.setCursor(SCREEN_W / 2 - 30, 14); tft.printf("%3d/%-3d", i + 1, n);
+  tft.setCursor(SCREEN_W - 48, 14); tft.print(paused ? "PRINT" : "");
+  int y = SCREEN_H - BAR_H;
+  tft.fillRect(0, y, SCREEN_W, BAR_H, paused ? TFT_DARKGREEN : TFT_BLACK);
+  tft.setTextColor(TFT_WHITE, paused ? TFT_DARKGREEN : TFT_BLACK);
+  tft.setCursor(6, y + 14);
+  tft.print(paused ? "  < prev      PLAY      next >" : "         tap to pause");
+}
+
+static void drawAnimFrame(const String &frame) {
+  tft.fillRect(0, ANIM_Y0, SCREEN_W, 13 * LINE_H, TFT_BLACK);
+  tft.setTextColor(TFT_GREEN, TFT_BLACK);            // phosphor green, because of course
+  int row = 0, pos = 0;
+  while (pos <= (int)frame.length() && row < 13) {
+    int eol = frame.indexOf('\n', pos);
+    if (eol < 0) eol = frame.length();
+    tft.setCursor(ANIM_X0, ANIM_Y0 + row * LINE_H);
+    tft.print(frame.substring(pos, eol));
+    pos = eol + 1;
+    row++;
+  }
+}
+
 void playAsciiAnimation(const String &animText) {
   float fps = 4;
   int fpsPos = animText.indexOf("# fps:");
   if (fpsPos >= 0) fps = constrain(animText.substring(fpsPos + 6).toFloat(), 0.1f, 60.0f);
-  const int frameMs = (int)(1000 / fps);
-  const int x0 = (SCREEN_W - 32 * CHAR_W) / 2, y0 = 60;
+  const unsigned long frameMs = (unsigned long)(1000 / fps);
+  const bool loops = animText.indexOf("# loop: no") < 0;
+
+  // Index the frames: each starts after a line that is exactly "---".
+  static int starts[MAX_FRAMES], ends[MAX_FRAMES];
+  int n = 0, pos = 0;
+  while (n < MAX_FRAMES) {
+    int sep = animText.indexOf("\n---\n", pos);
+    if (sep < 0) break;
+    if (n > 0) ends[n - 1] = sep;
+    starts[n++] = sep + 5;
+    pos = sep + 4;                                   // keep the '\n' so back-to-back separators match
+  }
+  if (n == 0) return;
+  ends[n - 1] = animText.length();
+  auto frameText = [&](int i) { return animText.substring(starts[i], max(starts[i], ends[i])); };
 
   tft.fillScreen(TFT_BLACK);
-  tft.setTextColor(TFT_GREEN, TFT_BLACK);            // phosphor green, because of course
-  int pos = animText.indexOf("\n---");
-  if (pos < 0) return;
-  pos = animText.indexOf('\n', pos + 1) + 1;         // first frame line
-  int row = 0;
-  while (pos > 0 && pos < (int)animText.length()) {
-    int eol = animText.indexOf('\n', pos);
-    if (eol < 0) eol = animText.length();
-    String line = animText.substring(pos, eol);
-    if (line == "---") {                             // frame boundary: show it, wait, clear
-      delay(frameMs);
-      tft.fillRect(0, y0, SCREEN_W, 13 * LINE_H, TFT_BLACK);
-      row = 0;
-    } else {
-      tft.setCursor(x0, y0 + row * LINE_H);
-      tft.print(line);
-      row++;
-    }
-    pos = eol + 1;
+  int i = 0, played = 0;
+  bool paused = false;
+  drawAnimChrome(i, n, paused);
+  drawAnimFrame(frameText(i));
+  unsigned long last = millis();
+
+  while (true) {
     int tx, ty;
-    if (readTouch(tx, ty)) break;                    // tap to stop
+    if (readTouch(tx, ty)) {
+      waitForRelease();
+      if (!paused) {
+        paused = true;
+      } else if (ty < BAR_H && tx < SCREEN_W / 3) {
+        break;                                       // EXIT
+      } else if (ty < BAR_H && tx > SCREEN_W * 2 / 3) {
+        String f = frameText(i);                     // PRINT this frame onto the paper
+        drawPaper(); drawStatus("frame " + String(i + 1));
+        printTextSlowly(f + "\n");
+        return;
+      } else if (ty < BAR_H) {
+        // middle of the top bar: frame counter, ignore
+      } else if (tx < SCREEN_W / 3) {
+        i = (i - 1 + n) % n;
+      } else if (tx > SCREEN_W * 2 / 3) {
+        i = (i + 1) % n;
+      } else {
+        paused = false;
+      }
+      drawAnimChrome(i, n, paused);
+      drawAnimFrame(frameText(i));
+      last = millis();
+    }
+    if (!paused && millis() - last >= frameMs) {
+      last = millis();
+      if (i + 1 >= n) {
+        if (!loops || ++played >= ANIM_LOOPS) break;
+      }
+      i = (i + 1) % n;
+      drawAnimFrame(frameText(i));
+      drawAnimChrome(i, n, paused);
+    }
+    if (USB_SERIAL_JOBS && Serial.available()) break; // a print job arrived: get out of the way
+    delay(10);
   }
-  delay(frameMs);
   drawPaper(); drawStatus("READY");
 }
 
@@ -624,8 +730,8 @@ void setup() {
   pinMode(TFT_BACKLIGHT_PIN, OUTPUT);
   digitalWrite(TFT_BACKLIGHT_PIN, HIGH);
 
-  C_GREEN     = tft.color565(200, 236, 200);
-  C_CREAM     = tft.color565(252, 250, 236);
+  C_GREEN     = tft.color565(225, 239, 217);   // period greenbar: pale, slightly grey mint
+  C_CREAM     = tft.color565(251, 250, 241);   // warm white stock
   C_STRIP     = tft.color565(246, 246, 240);
   C_HOLE      = tft.color565(60, 60, 60);
   C_PERF      = tft.color565(165, 165, 165);

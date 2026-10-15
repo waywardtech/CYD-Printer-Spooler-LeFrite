@@ -1,0 +1,140 @@
+#!/usr/bin/env python3
+"""
+CUPS backend for LE SPOOLER: lets any Linux app (and, if shared, any computer on
+the LAN) print to the fanfold printer.
+
+Device URI:  lespooler://HOST:PORT        e.g. lespooler://127.0.0.1:8765
+
+CUPS calls a backend as:
+    lespooler                                     -> list devices (discovery)
+    lespooler JOB USER TITLE COPIES OPTIONS [FILE]  -> print one job
+
+Desktop apps usually send PDF; that's turned into text with `pdftotext -layout`
+(page breaks become form feeds, which LE SPOOLER feeds to the next form).
+PostScript goes through ghostscript's txtwrite device. Plain text passes through.
+
+Install: see contrib/cups/install-cups-printer.sh. Standard library only.
+Installed mode 0755 so CUPS runs it as the unprivileged 'lp' user, not root.
+"""
+
+import json
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+import urllib.error
+import urllib.request
+from urllib.parse import urlparse
+
+# CUPS backend exit codes
+OK, FAILED, RETRY = 0, 1, 6
+MAX_BYTES = 1024 * 1024 - 4096  # stay under the spooler's 1 MiB limit
+
+
+def log(level, msg):
+    sys.stderr.write(f"{level}: {msg}\n")
+    sys.stderr.flush()
+
+
+def sniff(data: bytes, content_type: str) -> str:
+    if data.startswith(b"%PDF"):
+        return "pdf"
+    if data.startswith(b"%!"):
+        return "ps"
+    if content_type.startswith("text/") or not content_type:
+        return "text"
+    if content_type in ("application/pdf", "application/vnd.cups-pdf"):
+        return "pdf"
+    if content_type in ("application/postscript", "application/vnd.cups-postscript"):
+        return "ps"
+    # Unknown: if it decodes as UTF-8 text, treat it as text.
+    try:
+        data.decode("utf-8")
+        return "text"
+    except UnicodeDecodeError:
+        return "binary"
+
+
+def run(cmd, data):
+    with tempfile.NamedTemporaryFile(suffix=".bin") as tmp:
+        tmp.write(data)
+        tmp.flush()
+        cmd = [c if c != "{in}" else tmp.name for c in cmd]
+        return subprocess.run(cmd, capture_output=True, timeout=120, check=True).stdout
+
+
+def to_text(data: bytes, kind: str) -> str:
+    if kind == "pdf":
+        if shutil.which("pdftotext"):
+            out = run(["pdftotext", "-layout", "-enc", "UTF-8", "{in}", "-"], data)
+        elif shutil.which("gs"):
+            out = run(["gs", "-q", "-dNOPAUSE", "-dBATCH", "-sDEVICE=txtwrite", "-sOutputFile=-", "{in}"], data)
+        else:
+            raise RuntimeError("PDF job but neither pdftotext (poppler-utils) nor gs (ghostscript) is installed")
+    elif kind == "ps":
+        if not shutil.which("gs"):
+            raise RuntimeError("PostScript job but ghostscript (gs) is not installed")
+        out = run(["gs", "-q", "-dNOPAUSE", "-dBATCH", "-sDEVICE=txtwrite", "-sOutputFile=-", "{in}"], data)
+    elif kind == "text":
+        out = data
+    else:
+        raise RuntimeError("LE SPOOLER only prints text, PDF or PostScript (got binary data)")
+    text = out.decode("utf-8", errors="replace").replace("\r\n", "\n")
+    # pdftotext ends every page with \f; drop the very last one so we don't feed a blank form
+    return text[:-1] if text.endswith("\f") else text
+
+
+def main(argv):
+    if len(argv) == 1:
+        # Discovery line for lpinfo / the "Add printer" dialogs
+        print('network lespooler "LE SPOOLER" "LE SPOOLER fanfold printer (HTTP spooler)" "" ""')
+        return OK
+    if len(argv) not in (6, 7):
+        log("ERROR", "usage: lespooler job-id user title copies options [file]")
+        return FAILED
+
+    job_id, user, title, copies = argv[1], argv[2], argv[3], max(1, int(argv[4] or 1))
+    uri = urlparse(os.environ.get("DEVICE_URI", "lespooler://127.0.0.1:8765"))
+    base = f"http://{uri.hostname or '127.0.0.1'}:{uri.port or 8765}"
+
+    if len(argv) == 7:
+        with open(argv[6], "rb") as f:
+            data = f.read()
+    else:
+        data = sys.stdin.buffer.read()
+
+    kind = sniff(data, os.environ.get("CONTENT_TYPE", ""))
+    log("INFO", f"Converting {kind} job for LE SPOOLER")
+    try:
+        text = to_text(data, kind)
+    except (RuntimeError, subprocess.SubprocessError) as e:
+        log("ERROR", str(e))
+        return FAILED
+    if not text.strip():
+        log("ERROR", "Nothing printable in this job (a scanned image PDF has no text)")
+        return FAILED
+    body = (text if text.endswith("\n") else text + "\n")
+    body = ((body + "\f") * copies)[:-1] if copies > 1 else body
+    body = body.encode("utf-8")[:MAX_BYTES].decode("utf-8", errors="ignore")
+
+    payload = {"title": (title or f"CUPS job {job_id}")[:120], "source": f"cups:{user}",
+               "mode": "print", "style": "greenbar", "body": body}
+    req = urllib.request.Request(base + "/print", data=json.dumps(payload).encode("utf-8"),
+                                 headers={"Content-Type": "application/json"}, method="POST")
+    log("INFO", f"Sending to LE SPOOLER at {base}")
+    try:
+        with urllib.request.urlopen(req, timeout=15) as r:
+            result = json.load(r)
+    except urllib.error.HTTPError as e:
+        log("ERROR", f"LE SPOOLER refused the job: HTTP {e.code}")
+        return FAILED
+    except (urllib.error.URLError, OSError) as e:
+        log("ERROR", f"LE SPOOLER not reachable at {base}: {getattr(e, 'reason', e)}. Will retry.")
+        return RETRY
+    log("INFO", f"Queued as {result.get('id')} on LE SPOOLER")
+    return OK
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

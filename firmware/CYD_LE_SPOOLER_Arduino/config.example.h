@@ -4,7 +4,7 @@
 //  Copy this file to  config.h  (same folder) and edit it.
 //  config.h is git-ignored because it holds your Wi-Fi password.
 //
-//  ⚠️  PIN VALUES ARE UNVERIFIED. They are the values commonly published for
+//  WARNING: PIN VALUES ARE UNVERIFIED. They are the values commonly published for
 //      the ESP32-2432S028R "Cheap Yellow Display" (1x micro-USB, ILI9341).
 //      Check them against YOUR board before flashing. See ../../notes/hardware-notes.md
 // ============================================================================

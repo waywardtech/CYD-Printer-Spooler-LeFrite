@@ -181,7 +181,7 @@ def parse_envelope(text: str):
     KEY: value header block (ended by the first blank line) and return
     (headers_dict, body). Otherwise return ({}, text) unchanged.
     """
-    stripped = text.lstrip("﻿")
+    stripped = text.lstrip("\ufeff")
     if not stripped.lstrip().startswith(ENVELOPE_BEGIN):
         return {}, text
 

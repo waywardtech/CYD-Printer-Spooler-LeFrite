@@ -33,9 +33,12 @@ import json
 import os
 import random
 import shutil
+import signal
 import sys
 import time
 import unicodedata
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -50,13 +53,13 @@ from le_spooler_server import (  # noqa: E402  (same directory, stdlib only)
 
 # Spacing accent struck over a letter -> Unicode combining mark.
 ACCENTS = {
-    "'": "́",  # acute       é
-    "`": "̀",  # grave       à
-    "^": "̂",  # circumflex  ô
-    "~": "̃",  # tilde       ñ
-    ",": "̧",  # cedilla     ç
-    '"': "̈",  # diaeresis   ü
-    "´": "́",
+    "'": "\u0301",  # acute       é
+    "`": "\u0300",  # grave       à
+    "^": "\u0302",  # circumflex  ô
+    "~": "\u0303",  # tilde       ñ
+    ",": "\u0327",  # cedilla     ç
+    '"': "\u0308",  # diaeresis   ü
+    "\u00b4": "\u0301",
 }
 
 # Classic typewriter overstrike tricks that aren't accents.
@@ -82,14 +85,24 @@ def compose(a: str, b: str):
 # Paper styles (xterm-256 colour numbers)
 # --------------------------------------------------------------------------
 
+# 24-bit colours. Period greenbar is a pale, slightly grey mint on warm white
+# stock, not a bright green. Terminals without truecolor get the nearest xterm-256.
 STYLES = {
-    #            band A   band B   strip  hole  perf
-    "greenbar": (194,     230,     231,   240,  246),
-    "bluebar":  (189,     231,     231,   240,  246),
-    "plain":    (230,     230,     230,   240,  246),
-    "thermal":  (255,     255,     255,   250,  252),
+    #            band A           band B           strip            hole          perf
+    "greenbar": ((225, 239, 217), (251, 250, 241), (247, 246, 239), (47, 48, 45), (185, 185, 174)),
+    "bluebar":  ((226, 232, 246), (251, 250, 241), (247, 246, 239), (47, 48, 45), (185, 185, 174)),
+    "plain":    ((251, 250, 241), (251, 250, 241), (247, 246, 239), (47, 48, 45), (185, 185, 174)),
+    "thermal":  ((255, 255, 255), (255, 255, 255), (255, 255, 255), (190, 190, 190), (215, 215, 215)),
 }
-INK_LEVELS = [(0.60, 16), (0.35, 238), (0.15, 243), (0.0, 247)]  # (ribbon >=, fg colour)
+
+
+def xterm256(rgb):
+    """Nearest xterm-256 colour (6x6x6 cube or grey ramp)."""
+    r, g, b = rgb
+    if max(rgb) - min(rgb) < 8:  # near-grey: use the 24-step ramp
+        return 232 + min(23, max(0, round((r - 8) / 10)))
+    q = lambda v: 0 if v < 48 else (1 if v < 115 else (v - 35) // 40)  # noqa: E731
+    return 16 + 36 * q(r) + 6 * q(g) + q(b)
 
 SPEEDS = {"teletype": 10.0, "daisywheel": 30.0, "fast": 250.0, "instant": 0.0}
 
@@ -105,10 +118,10 @@ STRIP_W = 4  # tractor-feed strip width in terminal columns (each side)
 
 
 class Cell:
-    __slots__ = ("ch", "bold", "under", "struck", "ink", "miss")
+    __slots__ = ("ch", "bold", "under", "struck", "ink", "miss", "tone")
 
-    def __init__(self, ch, ink):
-        self.ch, self.ink = ch, ink
+    def __init__(self, ch, ink, tone=0):
+        self.ch, self.ink, self.tone = ch, ink, tone  # tone: per-strike hammer/ribbon variation
         self.bold = self.under = self.struck = self.miss = False
 
 
@@ -117,6 +130,7 @@ class Printer:
         self.out = out or sys.stdout
         self.tty = self.out.isatty()
         self.color = self.tty and not args.no_color and "NO_COLOR" not in os.environ
+        self.truecolor = os.environ.get("COLORTERM", "").lower() in ("truecolor", "24bit")
         enc = (getattr(self.out, "encoding", "") or "").lower()
         self.uni = enc.startswith("utf") and not args.ascii
         self.animate = self.tty and args.cps > 0
@@ -143,6 +157,12 @@ class Printer:
     def sgr(self, *codes):
         return f"\x1b[{';'.join(str(c) for c in codes)}m" if self.color else ""
 
+    def fg(self, rgb):
+        return self.sgr(38, 2, *rgb) if self.truecolor else self.sgr(38, 5, xterm256(rgb))
+
+    def bg(self, rgb):
+        return self.sgr(48, 2, *rgb) if self.truecolor else self.sgr(48, 5, xterm256(rgb))
+
     def pause(self, seconds):
         if self.animate and seconds > 0:
             self.out.flush()
@@ -166,15 +186,15 @@ class Printer:
         if not self.color:
             band = ("▒" if self.uni else "#") if self.band_is_a(line) else " "
             return (perf + band + " " + hc + "  ") if right else ("  " + hc + " " + band + perf)
-        body = self.sgr(48, 5, s, 38, 5, h) + ("  " + hc + " " if not right else " " + hc + "  ")
-        pf = self.sgr(48, 5, s, 38, 5, p) + perf
+        body = self.bg(s) + self.fg(h) + ("  " + hc + " " if not right else " " + hc + "  ")
+        pf = self.bg(s) + self.fg(p) + perf
         return (pf + body if right else body + pf) + self.sgr(0)
 
-    def ink_fg(self, ink):
-        for threshold, fg in INK_LEVELS:
-            if ink >= threshold:
-                return fg
-        return INK_LEVELS[-1][1]
+    def ink_rgb(self, c):
+        """Blue-black ribbon ink: fades with the ribbon, varies a little per strike."""
+        t = 26 + c.tone + (1.0 - c.ink) * 165 + (60 if c.miss else 0)
+        t = int(max(10, min(205, t)))
+        return (t, t, min(255, t + 12))
 
     def render_row(self, cells, line, note=""):
         a, b, *_ = self.colors
@@ -184,12 +204,13 @@ class Printer:
         body_cells = body_cells[: self.width]
         body_cells += [None] * (self.width - len(body_cells))
         if self.color:
-            parts.append(self.sgr(48, 5, bg))
+            paper = self.bg(bg)
+            parts.append(paper)
             for c in body_cells:
                 if c is None or c.ch == " ":
                     parts.append(" ")
                     continue
-                codes = [38, 5, self.ink_fg(c.ink)]
+                codes = []
                 if c.bold:
                     codes.append(1)
                 if c.under:
@@ -198,12 +219,12 @@ class Printer:
                     codes.append(9)
                 if c.miss:
                     codes.append(3)
-                parts.append(self.sgr(0) + self.sgr(48, 5, bg) + self.sgr(*codes) + c.ch
-                             + self.sgr(0) + self.sgr(48, 5, bg))
+                parts.append(self.sgr(0) + paper + self.fg(self.ink_rgb(c))
+                             + (self.sgr(*codes) if codes else "") + c.ch + self.sgr(0) + paper)
             parts.append(self.sgr(0))
         else:
             parts.append("".join(" " if c is None else
-                                 c.ch + ("̶" if c.struck and self.uni else "")
+                                 c.ch + ("\u0336" if c.struck and self.uni else "")
                                  for c in body_cells))
         parts.append(self.strip(line, right=True))
         if note:
@@ -228,7 +249,7 @@ class Printer:
             label = f" {label} "
             mid = (total - len(label)) // 2
             text = text[:mid] + label + text[mid + len(label):]
-        self.w(self.sgr(48, 5, self.colors[2], 38, 5, 244) + text + self.sgr(0) + "\n")
+        self.w(self.bg(self.colors[2]) + self.fg((140, 140, 132)) + text + self.sgr(0) + "\n")
 
     # --- mechanism --------------------------------------------------------
 
@@ -301,7 +322,8 @@ class Printer:
         cell = self.cells[self.col]
         if cell is None or cell.ch == " ":
             if ch_eff != " ":
-                self.cells[self.col] = Cell(ch_eff, ink)
+                # uneven hammer pressure: each strike is a touch lighter or darker
+                self.cells[self.col] = Cell(ch_eff, ink, self.rng.randint(-14, 22))
         elif ch_eff != " ":
             self.events["overstrike"] += 1
             if ch_eff == cell.ch:
@@ -441,35 +463,117 @@ def play_animation(name, loops, args):
         bot = bl + hz * (w + 2 - len(foot)) + foot + br
         return "\n".join([top, *rows, bot])
 
+    def print_frame(i):
+        """Queue frame i on the spooler, so it comes out on (virtual or real) paper."""
+        job = {"title": f"{anim.get('name', name)} - frame {i + 1}/{len(frames)}", "source": "preview",
+               "mode": "print", "style": args.style or "greenbar", "body": "\n".join(frames[i]) + "\n"}
+        req = urllib.request.Request(args.server.rstrip("/") + "/print", data=json.dumps(job).encode(),
+                                     headers={"Content-Type": "application/json"}, method="POST")
+        try:
+            with urllib.request.urlopen(req, timeout=5) as r:
+                return f"queued frame {i + 1} as {json.load(r)['id']}"
+        except (urllib.error.URLError, OSError) as e:
+            return f"print failed: {getattr(e, 'reason', e)} (is the server running at {args.server}?)"
+
+    if args.frame is not None or args.print_frame is not None:
+        i = (args.print_frame if args.print_frame is not None else args.frame) - 1
+        if not 0 <= i < len(frames):
+            sys.exit(f"preview: frame must be 1..{len(frames)}")
+        print(frame_box(i, frames[i]))
+        if args.print_frame is not None:
+            print(print_frame(i))
+        return
+
     if not tty:  # e.g. piped into a log: just show every frame once
         for i, f in enumerate(frames):
             print(frame_box(i, f))
         return
+
+    keys = KeyReader()
+    help_line = "space pause/play · ←/→ step · p print frame · q quit"
+    status, i, playing, loops_done = "", 0, True, 0
     sys.stdout.write("\x1b[?25l\x1b[2J")  # hide cursor, clear screen: fixed "screen" mode
     try:
-        n = 0
-        while loops <= 0 or n < loops:
-            for i, f in enumerate(frames):
-                sys.stdout.write("\x1b[H" + frame_box(i, f) + "\n")
+        with keys:
+            while True:
+                state = "▶ playing" if playing else "❚❚ paused"
+                sys.stdout.write("\x1b[H" + frame_box(i, frames[i]) + f"\n {state:<11} {help_line}\x1b[K\n {status}\x1b[K\n")
                 sys.stdout.flush()
-                time.sleep(1.0 / fps)
-            n += 1
-            if not anim.get("loop", True):
-                break
+                key = keys.read(1.0 / fps if playing else None)
+                if key in ("q", "\x1b", "\x03"):
+                    break
+                if key == " ":
+                    playing = not playing
+                elif key in ("right", "l", "."):
+                    playing, i = False, (i + 1) % len(frames)
+                elif key in ("left", "h", ","):
+                    playing, i = False, (i - 1) % len(frames)
+                elif key in ("p", "P"):
+                    playing, status = False, print_frame(i)
+                elif key is None and playing:
+                    i += 1
+                    if i >= len(frames):
+                        loops_done += 1
+                        if not anim.get("loop", True) or (loops > 0 and loops_done >= loops):
+                            break
+                        i = 0
     except KeyboardInterrupt:
         pass
     finally:
         sys.stdout.write("\x1b[?25h\n")
 
 
+class KeyReader:
+    """Single-key input for the animation player (POSIX terminals; elsewhere keys are ignored)."""
+
+    def __enter__(self):
+        self.saved = None
+        try:
+            import termios
+            import tty
+            self.termios = termios
+            self.fd = sys.stdin.fileno()
+            if sys.stdin.isatty():
+                self.saved = termios.tcgetattr(self.fd)
+                tty.setcbreak(self.fd)
+        except (ImportError, OSError, ValueError):
+            pass
+        return self
+
+    def __exit__(self, *exc):
+        if self.saved is not None:
+            self.termios.tcsetattr(self.fd, self.termios.TCSADRAIN, self.saved)
+
+    def read(self, timeout):
+        """Return a key ('right'/'left' for arrows), or None after `timeout` seconds."""
+        if self.saved is None:
+            time.sleep(timeout if timeout is not None else 0.25)
+            return None
+        import select
+        ready, _, _ = select.select([sys.stdin], [], [], timeout)
+        if not ready:
+            return None
+        ch = os.read(self.fd, 1).decode(errors="ignore")
+        if ch == "\x1b" and select.select([sys.stdin], [], [], 0.03)[0]:
+            seq = os.read(self.fd, 2).decode(errors="ignore")
+            return {"[C": "right", "[D": "left"}.get(seq, "")
+        return ch
+
+
 def main():
+    if hasattr(signal, "SIGPIPE"):  # `preview ... | head` should just stop quietly
+        signal.signal(signal.SIGPIPE, signal.SIG_DFL)
     ap = argparse.ArgumentParser(description="Preview LE SPOOLER jobs as fanfold paper in a terminal.")
     ap.add_argument("job_id", nargs="?", help="job id (default: next queued, else newest printed)")
     ap.add_argument("--file", help="preview a local .txt / .json / @LE_SPOOLER envelope file")
     ap.add_argument("--demo", action="store_true", help="print the built-in control-character demo")
     ap.add_argument("--list", action="store_true", help="list spooled jobs and exit")
     ap.add_argument("--anim", metavar="NAME", help="play an ASCII animation on a fixed screen")
-    ap.add_argument("--loops", type=int, default=3, help="animation loops (0 = forever, Ctrl-C to stop)")
+    ap.add_argument("--loops", type=int, default=3, help="animation loops (0 = forever, q to stop)")
+    ap.add_argument("--frame", type=int, metavar="N", help="with --anim: show only frame N and exit")
+    ap.add_argument("--print-frame", type=int, metavar="N", help="with --anim: send frame N to the spooler as a job")
+    ap.add_argument("--server", default=os.environ.get("LE_SPOOLER_URL", "http://127.0.0.1:8765"),
+                    help="spooler URL for --print-frame / the p key (default http://127.0.0.1:8765)")
     ap.add_argument("--speed", default="daisywheel",
                     help="teletype | daisywheel | fast | instant | <chars per second>")
     ap.add_argument("--chaos", default="off", choices=list(CHAOS), help="random printer events (default off)")
