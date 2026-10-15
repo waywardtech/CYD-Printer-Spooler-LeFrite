@@ -54,7 +54,15 @@
   .pill.queued { background: var(--warn); color: #241600; }
   .pill.printed { background: #3d5a33; }
   .id { font-family: var(--mono); color: var(--muted); white-space: nowrap; }
-  #queuebox { max-height: 300px; overflow: auto; }
+  #queuebox { max-height: 340px; overflow: auto; margin-top: 8px; }
+  td.t { cursor: pointer; overflow-wrap: anywhere; }
+  td.acts { white-space: nowrap; text-align: right; }
+  button.act { padding: 2px 6px; font-size: 13px; margin-left: 3px; }
+  .pill.held { background: #5a5f8a; }
+  .pstat { font-size: 13px; padding: 7px 9px; border-radius: 6px; }
+  .pstat.on { background: #2f4a29; color: #c9f2b6; }
+  .pstat.off { background: #3d3424; color: #f0d29b; }
+  #vpmsg, #qmsg { white-space: normal; min-height: 1.2em; }
 
   /* ---- fanfold paper ---- */
   #paperwrap { overflow: auto; max-height: 70vh; background: #151614; border-radius: 8px; padding: 10px 0; margin-top: 10px; }
@@ -130,7 +138,11 @@ Bold: B\bBO\bOL\bLD\bD   Underline: U\b_N\b_D\b_E\b_R\b_</textarea>
     </section>
     <section style="margin-top:16px">
       <h2>Queue</h2>
-      <div id="queuebox"><table><thead><tr><th>Job</th><th>Title</th><th></th></tr></thead><tbody id="queue"></tbody></table></div>
+      <div id="printerstatus" class="pstat off">🖨 checking for printers…</div>
+      <div class="check"><input type="checkbox" id="vp"><label for="vp"><b>Virtual printer:</b> let this browser tab collect and print queued jobs</label></div>
+      <div id="vpmsg" class="id"></div>
+      <div id="queuebox"><table><thead><tr><th>Job</th><th>Title</th><th>Status</th><th></th></tr></thead><tbody id="queue"></tbody></table></div>
+      <div id="qmsg" class="id"></div>
     </section>
   </div>
 
@@ -298,26 +310,88 @@ $("form").onsubmit = async (e) => {
 };
 
 // ---------- queue & health ----------
+// Which actions make sense for a job in each state
+const ACTIONS = {
+  queued:  [["view", "👁", "Show it on the paper"], ["printed", "✓", "Mark as printed"], ["hold", "⏸", "Hold (the printer skips it)"], ["delete", "🗑", "Delete"]],
+  held:    [["view", "👁", "Show it on the paper"], ["release", "▶", "Release back into the queue"], ["delete", "🗑", "Delete"]],
+  printed: [["view", "👁", "Show it on the paper"], ["reprint", "↻", "Print it again"], ["delete", "🗑", "Delete"]],
+};
+async function jobAction(j, action) {
+  if (action === "view") { const r = await api(`/jobs/${j.id}`); return printOnPaper(r.job.body, r.job); }
+  if (action === "delete" && !confirm(`Delete "${j.title}"?`)) return;
+  const r = await api(`/jobs/${j.id}/${action}`, { method: "POST" });
+  $("qmsg").textContent = r.ok ? `${action}: ${j.title}${r.copy_of ? " (new job " + r.id + ")" : ""}` : `error: ${r.error}`;
+  refresh();
+}
+let lastJobsKey = "";
 async function refresh() {
   try {
     const h = await api("/health");
     $("status").className = "ok";
-    $("status").textContent = `v${h.version} · ${h.queued} queued · ${h.printed} printed`;
+    $("status").textContent = `v${h.version} · ${h.queued} queued · ${h.held || 0} held · ${h.printed} printed`;
+    const online = (h.printers || []).filter((p) => p.online);
+    const ps = $("printerstatus");
+    if (online.length) {
+      ps.className = "pstat on";
+      ps.textContent = "🖨 Printer online: " + online.map((p) => p.name).join(", ");
+    } else {
+      const last = (h.printers || [])[0];
+      ps.className = "pstat off";
+      ps.textContent = "🖨 No printer is collecting jobs" +
+        (last ? ` (last seen: ${last.name}, ${Math.round(last.seconds_ago)}s ago)` : "") +
+        ". Queued jobs wait here until the CYD (or the virtual printer below) picks them up.";
+    }
     const { jobs } = await api("/jobs");
+    const key = JSON.stringify(jobs.map((j) => [j.id, j.status]));
+    if (key === lastJobsKey) return;                     // nothing changed: don't redraw
+    lastJobsKey = key;
     $("queue").innerHTML = "";
+    if (!jobs.length) $("queue").innerHTML = `<tr><td colspan="4" class="id">no jobs yet</td></tr>`;
     for (const j of jobs.slice().reverse()) {
       const tr = document.createElement("tr");
       tr.className = "job";
-      tr.innerHTML = `<td class="id"></td><td></td><td><span class="pill"></span></td>`;
+      tr.innerHTML = `<td class="id"></td><td class="t"></td><td><span class="pill"></span></td><td class="acts"></td>`;
       tr.children[0].textContent = j.id.slice(9);
       tr.children[1].textContent = j.title;
+      tr.children[1].title = `${j.id} · ${j.chars} chars · from ${j.source}`;
       tr.querySelector(".pill").textContent = j.status;
       tr.querySelector(".pill").classList.add(j.status);
-      tr.title = `${j.id} · ${j.chars} chars · from ${j.source}`;
-      tr.onclick = async () => { const r = await api(`/jobs/${j.id}`); printOnPaper(r.job.body, r.job); };
+      for (const [act, icon, label] of ACTIONS[j.status] || []) {
+        const b = document.createElement("button");
+        b.type = "button"; b.className = "act"; b.textContent = icon; b.title = label;
+        b.setAttribute("aria-label", `${label}: ${j.title}`);
+        b.onclick = (e) => { e.stopPropagation(); jobAction(j, act); };
+        tr.children[3].appendChild(b);
+      }
+      tr.children[1].onclick = () => jobAction(j, "view");
       $("queue").appendChild(tr);
     }
   } catch (e) { $("status").className = "bad"; $("status").textContent = "spooler offline"; }
+}
+
+// ---------- virtual printer: this browser tab collects and "prints" queued jobs ----------
+let vpTimer = null, vpBusy = false;
+async function vpTick() {
+  if (vpBusy) return;
+  vpBusy = true;
+  try {
+    const r = await fetch("/next?printer=" + encodeURIComponent("Virtual printer (web)"));
+    if (r.status === 200) {
+      const { job } = await r.json();
+      $("vpmsg").textContent = `printing ${job.title}…`;
+      $("paperwrap").scrollIntoView({ block: "nearest" });
+      await printOnPaper(job.body, job);
+      await api(`/ack/${job.id}`, { method: "POST" });
+      $("vpmsg").textContent = `printed ${job.title}`;
+      refresh();
+    }
+  } catch (e) { $("vpmsg").textContent = "cannot reach spooler"; }
+  vpBusy = false;
+}
+$("vp").onchange = () => {
+  clearInterval(vpTimer);
+  if ($("vp").checked) { vpTimer = setInterval(vpTick, 3000); vpTick(); $("vpmsg").textContent = "waiting for jobs…"; }
+  else $("vpmsg").textContent = "";
 }
 
 // ---------- animations: play / pause / step / print a frame ----------

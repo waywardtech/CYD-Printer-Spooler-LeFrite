@@ -135,6 +135,33 @@ class SpoolerTest(unittest.TestCase):
         self.assertEqual(http("GET", self.base + "/animations/..%2Fsecret")[0], 400)
         self.assertEqual(http("GET", self.base + "/nope")[0], 404)
 
+    def test_hold_release_reprint_delete(self):
+        _, r = http("POST", self.base + "/print", {"title": "Managed", "body": "abc"})
+        jid = r["id"]
+        status = lambda: next((j["status"] for j in http("GET", self.base + "/jobs")[1]["jobs"]  # noqa: E731
+                               if j["id"] == jid), None)
+        self.assertEqual(http("POST", f"{self.base}/jobs/{jid}/hold")[1]["status"], "held")
+        self.assertEqual(status(), "held")
+        self.assertEqual(http("GET", self.base + "/next")[0], 204)          # held jobs are skipped
+        self.assertEqual(http("POST", f"{self.base}/jobs/{jid}/hold")[0], 409)  # already held
+        self.assertEqual(http("POST", f"{self.base}/jobs/{jid}/release")[1]["status"], "queued")
+        self.assertEqual(http("POST", f"{self.base}/jobs/{jid}/printed")[1]["status"], "printed")
+        code, r = http("POST", f"{self.base}/jobs/{jid}/reprint")
+        self.assertEqual((code, r["copy_of"]), (201, jid))
+        _, nxt = http("GET", self.base + "/next")
+        self.assertEqual((nxt["job"]["id"], nxt["job"]["body"]), (r["id"], "abc"))
+        self.assertEqual(http("DELETE", f"{self.base}/jobs/{jid}")[1]["status"], "deleted")
+        self.assertIsNone(status())                                          # gone from the list
+        self.assertTrue((Path(TMP.name) / "deleted" / f"{jid}.json").exists())  # but recoverable
+        self.assertEqual(http("POST", f"{self.base}/jobs/{jid}/delete")[0], 404)
+        self.assertEqual(http("POST", f"{self.base}/jobs/{r['id']}/explode")[0], 404)
+
+    def test_printer_presence_from_polling(self):
+        http("GET", self.base + "/next?printer=Bench%20CYD")
+        _, h = http("GET", self.base + "/health")
+        p = next(p for p in h["printers"] if p["name"] == "Bench CYD")
+        self.assertTrue(p["online"])
+
     def test_jobs_listing(self):
         _, r = http("POST", self.base + "/print", {"title": "Listed", "body": "abc"})
         _, lst = http("GET", self.base + "/jobs")

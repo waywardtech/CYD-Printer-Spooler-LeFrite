@@ -12,6 +12,8 @@ CUPS calls a backend as:
 Desktop apps usually send PDF; that's turned into text with `pdftotext -layout`
 (page breaks become form feeds, which LE SPOOLER feeds to the next form).
 PostScript goes through ghostscript's txtwrite device. Plain text passes through.
+A PDF that is only a picture of a page (Windows/macOS driverless printing, phones,
+scans) is read with OCR when tesseract-ocr is installed.
 
 Install: see contrib/cups/install-cups-printer.sh. Standard library only.
 Installed mode 0755 so CUPS runs it as the unprivileged 'lp' user, not root.
@@ -81,8 +83,31 @@ def to_text(data: bytes, kind: str) -> str:
     else:
         raise RuntimeError("LE SPOOLER only prints text, PDF or PostScript (got binary data)")
     text = out.decode("utf-8", errors="replace").replace("\r\n", "\n")
+    if kind == "pdf" and not text.replace("\f", "").strip():
+        # A picture of a page (Windows/macOS driverless printing, phones, scans):
+        # read the text back out with OCR if tesseract is installed.
+        text = ocr_pdf(data)
     # pdftotext ends every page with \f; drop the very last one so we don't feed a blank form
     return text[:-1] if text.endswith("\f") else text
+
+
+def ocr_pdf(data: bytes) -> str:
+    if not (shutil.which("tesseract") and shutil.which("pdftoppm")):
+        log("INFO", "Page is an image and tesseract-ocr is not installed; can't read text from it")
+        return ""
+    log("INFO", "Page is an image; reading the text with OCR (tesseract)")
+    with tempfile.TemporaryDirectory(prefix="lespooler-ocr-") as tmp:
+        pdf = os.path.join(tmp, "job.pdf")
+        with open(pdf, "wb") as f:
+            f.write(data)
+        subprocess.run(["pdftoppm", "-r", "300", "-gray", "-png", "-l", "20", pdf, os.path.join(tmp, "p")],
+                       check=True, timeout=300, capture_output=True)
+        pages = []
+        for png in sorted(n for n in os.listdir(tmp) if n.endswith(".png")):
+            out = subprocess.run(["tesseract", os.path.join(tmp, png), "-", "--psm", "4"],
+                                 check=True, timeout=300, capture_output=True).stdout
+            pages.append(out.decode("utf-8", errors="replace").rstrip() + "\n")
+        return "\f".join(pages)
 
 
 def main(argv):
@@ -112,7 +137,8 @@ def main(argv):
         log("ERROR", str(e))
         return FAILED
     if not text.strip():
-        log("ERROR", "Nothing printable in this job (a scanned image PDF has no text)")
+        log("ERROR", "Nothing printable in this job: the page is an image with no text layer "
+                     "(install tesseract-ocr to read it, or use a text-only driver)")
         return FAILED
     body = (text if text.endswith("\n") else text + "\n")
     body = ((body + "\f") * copies)[:-1] if copies > 1 else body

@@ -17,6 +17,7 @@ Endpoints (see ../docs/protocol.md for full detail):
     GET  /jobs/<id>            one job (add ?format=text for the @LE_SPOOLER envelope)
     GET  /next                 oldest unacknowledged job, or 204 if the queue is empty
     POST /ack/<id>             mark job printed; moves it incoming/ -> printed/
+    POST /jobs/<id>/<action>   hold | release | delete | reprint | printed  (DELETE /jobs/<id> too)
     GET  /animations           list available ASCII animations
     GET  /animations/<name>    one animation, parsed into frames (add ?format=raw for the file)
 
@@ -45,7 +46,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-VERSION = "0.3.0"
+VERSION = "0.4.0"
 DEFAULT_HOST = "0.0.0.0"
 DEFAULT_PORT = 8765
 MAX_BODY_BYTES = 1024 * 1024  # 1 MiB is a *lot* of fanfold paper
@@ -54,6 +55,8 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 SPOOL_DIR = Path(os.environ.get("LE_SPOOLER_SPOOL") or PROJECT_ROOT / "spool").resolve()
 INCOMING_DIR = SPOOL_DIR / "incoming"
 PRINTED_DIR = SPOOL_DIR / "printed"
+HELD_DIR = SPOOL_DIR / "held"          # paused jobs: /next skips them
+DELETED_DIR = SPOOL_DIR / "deleted"    # soft-deleted jobs (recoverable by hand)
 INDEX_FILE = SPOOL_DIR / "index.jsonl"
 ANIM_DIR = PROJECT_ROOT / "assets" / "animations"
 WEB_DIR = Path(__file__).resolve().parent / "web"
@@ -96,7 +99,7 @@ def new_job_id() -> str:
 
 
 def ensure_dirs() -> None:
-    for d in (INCOMING_DIR, PRINTED_DIR, ANIM_DIR):
+    for d in (INCOMING_DIR, PRINTED_DIR, HELD_DIR, DELETED_DIR, ANIM_DIR):
         d.mkdir(parents=True, exist_ok=True)
     INDEX_FILE.touch(exist_ok=True)
 
@@ -140,12 +143,10 @@ def job_path(job_id: str):
     """Locate a job on disk. Returns (path, status) or (None, None)."""
     if not JOB_ID_RE.match(job_id or ""):
         return None, None
-    p = INCOMING_DIR / f"{job_id}.json"
-    if p.exists():
-        return p, "queued"
-    p = PRINTED_DIR / f"{job_id}.json"
-    if p.exists():
-        return p, "printed"
+    for folder, status in ((INCOMING_DIR, "queued"), (HELD_DIR, "held"), (PRINTED_DIR, "printed")):
+        p = folder / f"{job_id}.json"
+        if p.exists():
+            return p, status
     return None, None
 
 
@@ -292,6 +293,66 @@ def acknowledge(job_id: str):
         return job
 
 
+# Queue management: hold / release / delete / reprint ------------------------
+
+MOVES = {
+    #  action     allowed from              destination    new status
+    "hold":    ({"queued"},                HELD_DIR,      "held"),
+    "release": ({"held"},                  INCOMING_DIR,  "queued"),
+    "delete":  ({"queued", "held", "printed"}, DELETED_DIR, "deleted"),
+}
+
+
+def move_job(job_id: str, action: str):
+    """Apply hold/release/delete. Returns (job, error) - error is None on success."""
+    allowed, dest, new_status = MOVES[action]
+    with SPOOL_LOCK:
+        path, status = job_path(job_id)
+        if path is None:
+            return None, "no such job"
+        if status not in allowed:
+            return None, f"can't {action} a {status} job"
+        with path.open("r", encoding="utf-8") as f:
+            job = json.load(f)
+        os.replace(path, dest / path.name)
+        append_index({"event": action, "id": job_id, "at": utc_now()})
+        job["status"] = new_status
+        return job, None
+
+
+def reprint(job_id: str):
+    """Queue a fresh copy of any job (queued, held or printed)."""
+    job = load_job(job_id)
+    if job is None:
+        return None
+    fields = {k: job.get(k) for k in ("title", "mode", "style", "speed", "chaos", "body")}
+    fields["source"] = f"reprint of {job_id}"
+    return enqueue(fields)
+
+
+# Which printers are collecting jobs? Anything that polls /next counts.
+PRINTERS = {}  # name -> {"address", "agent", "last_seen"}
+PRINTER_ONLINE_SECONDS = 30
+
+
+def note_printer(address: str, agent: str, name: str = "") -> None:
+    if not name:
+        name = "CYD" if "ESP32" in agent else (agent.split("/")[0] or "printer")
+        name = f"{name} @ {address}"
+    PRINTERS[name] = {"address": address, "agent": agent, "last_seen": time.time()}
+
+
+def printer_status() -> list:
+    now = time.time()
+    out = []
+    for name, p in sorted(PRINTERS.items(), key=lambda kv: -kv[1]["last_seen"]):
+        age = now - p["last_seen"]
+        if age < 24 * 3600:
+            out.append({"name": name, "address": p["address"], "seconds_ago": round(age, 1),
+                        "online": age < PRINTER_ONLINE_SECONDS})
+    return out
+
+
 def list_jobs() -> list:
     """Fold index events into one entry per job, oldest first; verify on disk."""
     order, seen = [], {}
@@ -400,7 +461,7 @@ class SpoolerHandler(BaseHTTPRequestHandler):
     def _cors(self):
         # Lets browser tools (TurboWarp desktop / a local web page) call us.
         self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
         self.send_header("Access-Control-Allow-Private-Network", "true")
 
@@ -475,7 +536,9 @@ class SpoolerHandler(BaseHTTPRequestHandler):
                     "time": utc_now(),
                     "queued": queued,
                     "printed": printed,
+                    "held": sum(1 for _ in HELD_DIR.glob("*.json")),
                     "animations": len(list(ANIM_DIR.glob("*.anim"))),
+                    "printers": printer_status(),
                 })
 
             if parts == ["jobs"]:
@@ -491,6 +554,9 @@ class SpoolerHandler(BaseHTTPRequestHandler):
                 return self.send_json({"ok": True, "job": job})
 
             if parts == ["next"]:
+                # ?printer=NAME lets a client label itself (the web UI's virtual printer does)
+                note_printer(self.client_address[0], self.headers.get("User-Agent", ""),
+                             (q.get("printer") or [""])[0][:60])
                 job = next_job()
                 if job is None:
                     return self.send_empty(HTTPStatus.NO_CONTENT)
@@ -569,10 +635,45 @@ class SpoolerHandler(BaseHTTPRequestHandler):
                 return self.send_json({"ok": True, "id": job["id"], "status": "printed",
                                        "already_acked": job.get("already_acked", False)})
 
+            # Queue management: POST /jobs/<id>/{hold,release,delete,reprint,printed}
+            if len(parts) == 3 and parts[0] == "jobs":
+                return self.manage(parts[1], parts[2])
+
             return self.error(HTTPStatus.NOT_FOUND, "unknown endpoint")
         except Exception as e:
             log(f"error handling POST {self.path}: {e!r}")
             return self.error(HTTPStatus.INTERNAL_SERVER_ERROR, "internal error")
+
+    def do_DELETE(self):
+        parts, _ = self.route()
+        if len(parts) == 2 and parts[0] == "jobs":
+            return self.manage(parts[1], "delete")
+        return self.error(HTTPStatus.NOT_FOUND, "unknown endpoint")
+
+    def manage(self, job_id: str, action: str):
+        if not JOB_ID_RE.match(job_id):
+            return self.error(HTTPStatus.NOT_FOUND, "no such job")
+        if action == "printed":
+            job = acknowledge(job_id)
+            if job is None:
+                return self.error(HTTPStatus.NOT_FOUND, "no such job")
+            log(f"marked {job_id} printed by hand")
+            return self.send_json({"ok": True, "id": job_id, "status": "printed"})
+        if action == "reprint":
+            job = reprint(job_id)
+            if job is None:
+                return self.error(HTTPStatus.NOT_FOUND, "no such job")
+            log(f"reprint of {job_id} queued as {job['id']}")
+            return self.send_json({"ok": True, "id": job["id"], "status": "queued", "copy_of": job_id},
+                                  HTTPStatus.CREATED)
+        if action in MOVES:
+            job, err = move_job(job_id, action)
+            if err:
+                code = HTTPStatus.NOT_FOUND if err == "no such job" else HTTPStatus.CONFLICT
+                return self.error(code, err)
+            log(f"{action} {job_id}")
+            return self.send_json({"ok": True, "id": job_id, "status": job["status"]})
+        return self.error(HTTPStatus.NOT_FOUND, f"unknown action '{action}'")
 
 
 def make_server(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT, quiet: bool = False):

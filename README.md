@@ -37,7 +37,8 @@ If you ask, it will also jam, run out of paper, and wear out its ribbon.
 | | |
 |---|---|
 | 🖨️ **Print spooler** | A tiny HTTP queue (`POST /print`, `GET /next`, `POST /ack`). Pure Python standard library, nothing to install. |
-| 🌐 **Web UI** | Open `http://<your-box>:8765/` to type a document, watch the queue, and see any job typed onto animated greenbar paper. |
+| 🌐 **Web UI** | Open `http://<your-box>:8765/` to type a document and see any job typed onto animated greenbar paper. **Manage the queue**: view, hold/release, mark printed, reprint, delete. It also shows whether a printer is actually collecting jobs. |
+| 🖨️ **Virtual printer** | No CYD yet? Tick *Virtual printer* and the browser tab collects queued jobs, types them out, and marks them printed. |
 | 🖋️ **Looks like real type** | Typewriter face, uneven hammer pressure, slightly translucent ribbon ink, and true **overtype**: every strike adds ink, so `e` + backspace + `'` really layers an accent onto the letter. |
 | 🖥️ **A real printer for your desktop** | A CUPS backend makes "LE SPOOLER" appear in every app's Print dialog. It can also be shared over **Bonjour** so other computers on the LAN discover it. PDFs are converted to text, and page breaks become form feeds. |
 | 💻 **Terminal preview** | The same printer in your terminal: colour greenbar, sprocket holes, char-by-char typing. |
@@ -196,8 +197,14 @@ localhost. Undo it with `sudo cupsctl --no-share-printers` and
 | macOS | System Settings › Printers & Scanners › **+**, pick "LE SPOOLER fanfold printer". If asked for a driver, choose **Generic PostScript Printer**. |
 | Windows | Settings › Printers › Add device › "The printer that I want isn't listed" › by URL: `http://<your-box>:631/printers/LE_SPOOLER`, driver **Generic › Generic / Text Only** (best) or **Microsoft PS Class Driver**. Not an XPS driver: XPS can't be converted. |
 
-> Only text survives: images and scanned PDFs have nothing to print, and the backend
-> says so in the CUPS job log.
+> **Pictures of pages.** Driverless printing from Windows, macOS and phones often sends
+> each page as an *image*. The backend then reads the text back out with OCR
+> (`tesseract-ocr`, installed by the script). For the cleanest output on Windows, use the
+> **Generic / Text Only** driver, which sends real text.
+>
+> **Where are my jobs?** CUPS hands each job to LE SPOOLER within a second and marks it
+> *completed*. After that, the job lives in the LE SPOOLER queue, so view, hold,
+> reprint or delete it in the web UI.
 
 ## 📟 Flash the Cheap Yellow Display
 

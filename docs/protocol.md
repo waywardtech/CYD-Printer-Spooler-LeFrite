@@ -89,6 +89,11 @@ so browser tools such as TurboWarp can call it.
 | GET | `/jobs/<id>` | `{ok, job:{…, body, status}}`. `?format=text` returns the envelope, with header `X-Job-Id`. |
 | GET | `/next` | Oldest `queued` job: `{ok, job}`. **204 No Content** when the queue is empty. `?format=text` returns the envelope. |
 | POST | `/ack/<id>` | Mark printed and move it to `spool/printed/`. Idempotent: a repeat ack returns `already_acked: true`. 404 if unknown. |
+| POST | `/jobs/<id>/hold` | Park a queued job: `/next` skips it. 409 if it isn't queued. |
+| POST | `/jobs/<id>/release` | Put a held job back in the queue (keeps its place: ids sort by age). |
+| POST | `/jobs/<id>/printed` | Mark printed by hand (same as `/ack`). |
+| POST | `/jobs/<id>/reprint` | Queue a fresh copy of any job. **201** `{id, copy_of}` |
+| POST · DELETE | `/jobs/<id>/delete` · `/jobs/<id>` | Soft-delete: moved to `spool/deleted/`, gone from `/jobs`. |
 | GET | `/animations` | `{ok, count, animations:[{id, name, fps, loop, frame_count, width, height}]}` |
 | GET | `/animations/<name>` | `{ok, animation:{name, fps, loop, frames:[[line,…],…], …}}`. `?format=raw` returns the `.anim` file. |
 
@@ -110,6 +115,11 @@ full `@LE_SPOOLER` envelope.
 ```sh
 curl -X POST --data-binary @letter.txt -H 'Content-Type: text/plain' http://<spooler-ip>:8765/print
 ```
+
+### Printer presence
+Every `GET /next` is a heartbeat. `/health` lists `printers: [{name, address, seconds_ago, online}]`,
+where online means polled within 30 s. A client can name itself with `/next?printer=NAME`.
+The web UI's virtual printer uses `Virtual printer (web)`. The CYD is detected by its ESP32 user agent.
 
 ### CYD polling loop
 

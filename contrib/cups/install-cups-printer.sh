@@ -6,6 +6,7 @@
 #   sudo contrib/cups/install-cups-printer.sh --uninstall
 #
 # What it changes (all reversible with --uninstall, except installed packages):
+#   * installs poppler-utils / ghostscript / tesseract-ocr if missing (PDF, PS, OCR)
 #   * copies the backend to /usr/lib/cups/backend/lespooler (mode 0755: runs as user 'lp')
 #   * creates a CUPS queue "LE_SPOOLER" -> lespooler://127.0.0.1:$PORT
 #   * --share: installs avahi-daemon if missing, runs `cupsctl --share-printers`,
@@ -33,9 +34,14 @@ if ! command -v lpadmin >/dev/null && [[ ! -x /usr/sbin/lpadmin ]]; then
   say "Installing CUPS"
   apt-get update -qq && apt-get install -y cups
 fi
-for tool in pdftotext gs; do
-  command -v "$tool" >/dev/null || say "Note: '$tool' not found; install poppler-utils / ghostscript so PDF jobs from apps can be converted"
-done
+need=()
+command -v pdftotext >/dev/null || need+=(poppler-utils)   # PDF -> text
+command -v gs        >/dev/null || need+=(ghostscript)     # PostScript -> text
+command -v tesseract >/dev/null || need+=(tesseract-ocr)   # OCR for picture-of-a-page PDFs
+if ((${#need[@]})); then
+  say "Installing converters: ${need[*]}"
+  apt-get update -qq && apt-get install -y -qq "${need[@]}"
+fi
 
 say "Installing backend -> $BACKEND_DIR/lespooler"
 install -m 0755 "$HERE/lespooler" "$BACKEND_DIR/lespooler"
