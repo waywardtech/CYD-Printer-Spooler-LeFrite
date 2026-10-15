@@ -173,4 +173,4 @@ host -> CYD  : 0x18 (Ctrl-X)                      cancels the job being printed
 ```
 
 Opening the port toggles DTR/RTS, which resets most ESP32 boards. Wait for
-`@LE_SPOOLER_READY`, or about 2.5 s, before sending. `cli/leprint.py --serial` does this.
+`@LE_SPOOLER_READY` before sending. With no Wi-Fi configured this takes ~18 s, because the CYD tries Wi-Fi first. `cli/leprint.py --serial` waits for it.

@@ -16,6 +16,10 @@ notes/environment.txt
 notes/first-test.txt
 notes/*.log
 notes/*.pid
+notes/*.sh
+notes/*.py
+notes/cyd-backup/
+*.bin
 
 # Firmware secrets & build output
 firmware/CYD_LE_SPOOLER_Arduino/spooler_config.h

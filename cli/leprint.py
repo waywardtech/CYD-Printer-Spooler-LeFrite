@@ -72,7 +72,16 @@ def send_serial(device: str, payload: dict, baud: int, boot_wait: float, timeout
         attrs[4] = attrs[5] = speeds[baud]                   # ispeed / ospeed
         attrs[2] = (attrs[2] | termios.CLOCAL | termios.CREAD) & ~termios.HUPCL
         termios.tcsetattr(fd, termios.TCSANOW, attrs)
-        time.sleep(boot_wait)
+        # Opening the port may reset the CYD. Wait for its "@LE_SPOOLER_READY"
+        # (it tries Wi-Fi first, ~18 s with no Wi-Fi), or boot_wait seconds at most.
+        os.set_blocking(fd, False)
+        seen, deadline = b"", time.time() + boot_wait
+        while time.time() < deadline and b"@LE_SPOOLER_READY" not in seen:
+            try:
+                seen = (seen + os.read(fd, 512))[-4096:]
+            except BlockingIOError:
+                time.sleep(0.1)
+        os.set_blocking(fd, True)
         termios.tcflush(fd, termios.TCIFLUSH)                # drop boot chatter
         payload = dict(payload, id=payload.get("id") or time.strftime("serial-%Y%m%d-%H%M%S"))
         os.write(fd, envelope(payload).encode("utf-8"))
@@ -119,7 +128,8 @@ def main() -> int:
                     help=f"spooler base URL (default {DEFAULT_SERVER}, or $LE_SPOOLER_URL)")
     ap.add_argument("--serial", metavar="DEVICE", help="bypass the spooler: write to a CYD on this serial port")
     ap.add_argument("--baud", type=int, default=115200, help="serial speed (default 115200)")
-    ap.add_argument("--boot-wait", type=float, default=2.5, help="seconds to let the CYD reboot after opening the port")
+    ap.add_argument("--boot-wait", type=float, default=25,
+                    help="max seconds to wait for the CYD's @LE_SPOOLER_READY after opening the port")
     ap.add_argument("--timeout", type=float, default=120, help="seconds to wait for @ACK over serial")
     ap.add_argument("--quiet", "-q", action="store_true", help="only print the job id")
     args = ap.parse_args()
