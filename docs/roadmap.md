@@ -27,6 +27,7 @@
 
 ## v1.1: next
 - [ ] `leprint --serial` auto-detects the CYD's port
+- [x] Photos and picture-only pages: OCR or dithered ASCII art (CUPS backend + web UI)
 - [ ] AirPrint (iOS) advertising: needs URF/PWG raster input support
 
 ## v1.2: Fun
