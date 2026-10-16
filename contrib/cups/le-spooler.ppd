@@ -51,5 +51,22 @@
 *PaperDimension Letter: "612 792"
 *PaperDimension A4: "595 842"
 
+*OpenUI *LeSpoolerMode/Picture pages: PickOne
+*OrderDependency: 20 AnySetup *LeSpoolerMode
+*DefaultLeSpoolerMode: Auto
+*LeSpoolerMode Auto/Automatic (OCR words, ASCII-art pictures): ""
+*LeSpoolerMode Text/Always read text (OCR): ""
+*LeSpoolerMode Picture/Always ASCII art: ""
+*CloseUI: *LeSpoolerMode
+
+*OpenUI *AsciiWidth/ASCII art width: PickOne
+*OrderDependency: 20 AnySetup *AsciiWidth
+*DefaultAsciiWidth: 34
+*AsciiWidth 34/34 columns (CYD paper): ""
+*AsciiWidth 48/48 columns: ""
+*AsciiWidth 64/64 columns: ""
+*AsciiWidth 80/80 columns: ""
+*CloseUI: *AsciiWidth
+
 *DefaultFont: Courier
 *Font Courier: Standard "(002.004S)" Standard ROM

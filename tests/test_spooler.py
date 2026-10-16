@@ -223,6 +223,90 @@ class SpoolerTest(unittest.TestCase):
         self.assertIn("cannot reach", out.stderr)
 
 
+def load_backend():
+    from importlib.machinery import SourceFileLoader
+    from importlib.util import module_from_spec, spec_from_loader
+    loader = SourceFileLoader("lespooler_backend", str(ROOT / "contrib" / "cups" / "lespooler"))
+    mod = module_from_spec(spec_from_loader(loader.name, loader))
+    loader.exec_module(mod)
+    return mod
+
+
+class BackendTest(unittest.TestCase):
+    """The CUPS backend's pure-Python parts (no CUPS, poppler or tesseract needed)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.be = load_backend()
+
+    def pgm(self, w, h, fn):
+        data = bytes(fn(x, y) for y in range(h) for x in range(w))
+        path = Path(TMP.name) / f"test-{w}x{h}.pgm"
+        path.write_bytes(b"P5\n# made by a test\n%d %d\n255\n" % (w, h) + data)
+        return path
+
+    def test_options(self):
+        o = self.be.parse_options("job-uuid=urn:x LeSpoolerMode=Picture AsciiWidth=48 'media=9.5x11'")
+        self.assertEqual((o["lespoolermode"], o["asciiwidth"], o["media"]), ("Picture", "48", "9.5x11"))
+
+    def test_tsv_rebuilds_lines_and_counts_confident_words(self):
+        head = "level\tpage_num\tblock_num\tpar_num\tline_num\tword_num\tleft\ttop\twidth\theight\tconf\ttext\n"
+        rows = [(1, 1, 1, 1, 100, "Quarterly", 96), (1, 1, 1, 2, 300, "report", 91),
+                (1, 1, 2, 1, 140, "indented", 88), (2, 1, 1, 1, 100, "Next", 80),
+                (2, 1, 1, 2, 220, "para", 20)]   # conf 20: dropped as noise
+        tsv = head + "".join(f"5\t1\t{b}\t{p}\t{l}\t{n}\t{left}\t0\t{len(t) * 20}\t30\t{c}\t{t}\n"
+                             for b, p, l, n, left, t, c in rows)
+        text, good = self.be.tsv_to_text(tsv)
+        self.assertEqual(text, "Quarterly report\n  indented\n\nNext\n")
+        self.assertEqual(good, 4)
+
+    def test_pgm_and_ascii_art(self):
+        # a dark disc on a white page, with wide margins that should get cropped
+        def disc(x, y):
+            return 20 if (x - 150) ** 2 + (y - 100) ** 2 < 40 ** 2 else 255
+        w, h, px = self.be.read_pgm(self.pgm(300, 200, disc))
+        self.assertEqual((w, h, len(px)), (300, 200, 300 * 200))
+        art = self.be.ascii_art(w, h, px, cols=20, dither=False)
+        lines = art.splitlines()
+        self.assertLessEqual(max(len(l) for l in lines), 20)
+        self.assertGreaterEqual(len(lines), 8)                # cropped to the disc, ~1:1.8 cells
+        self.assertIn("@", art)                               # solid ink in the middle
+        mid = lines[len(lines) // 2].strip()
+        self.assertEqual(mid[len(mid) // 2], "@")             # solid ink at the centre
+        self.assertEqual(self.be.ascii_art(*self.be.read_pgm(self.pgm(50, 40, lambda x, y: 255))), "")
+
+    def test_gradient_uses_the_whole_ramp(self):
+        w, h, px = self.be.read_pgm(self.pgm(256, 40, lambda x, y: 255 - x))
+        art = self.be.ascii_art(w, h, px, cols=64, dither=False)
+        used = set(art) - {"\n"}
+        self.assertGreaterEqual(len(used), len(self.be.ASCII_RAMP) - 2)
+
+    def test_text_job_end_to_end_and_unreadable_job_never_blocks_queue(self):
+        httpd = srv.make_server("127.0.0.1", 0, quiet=True)
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        port = httpd.server_address[1]
+        try:
+            os.environ["DEVICE_URI"] = f"lespooler://127.0.0.1:{port}"
+            txt = Path(TMP.name) / "job.txt"
+            txt.write_text("HELLO FROM A BACKEND TEST\ncafe\b'\n", encoding="utf-8", newline="")
+            os.environ["CONTENT_TYPE"] = "text/plain"
+            self.assertEqual(self.be.main(["lespooler", "7", "dan", "Backend test", "1", "", str(txt)]), 0)
+            junk = Path(TMP.name) / "job.bin"
+            junk.write_bytes(bytes(range(256)) * 4)
+            os.environ["CONTENT_TYPE"] = "application/octet-stream"
+            self.assertEqual(self.be.main(["lespooler", "8", "dan", "Mystery", "1", "", str(junk)]), 0)
+            os.environ["DEVICE_URI"] = "lespooler://127.0.0.1:9"     # spooler down -> retry
+            self.assertEqual(self.be.main(["lespooler", "9", "dan", "Later", "1", "", str(txt)]), 6)
+            titles = {j["title"]: j for j in srv.list_jobs()}
+            self.assertEqual(srv.load_job(titles["Backend test"]["id"])["body"], "HELLO FROM A BACKEND TEST\ncafe\b'\n")
+            self.assertIn("couldn't read", srv.load_job(titles["Mystery"]["id"])["body"])
+        finally:
+            for k in ("DEVICE_URI", "CONTENT_TYPE"):
+                os.environ.pop(k, None)
+            httpd.shutdown()
+            httpd.server_close()
+
+
 class Utf8Buffer(io.StringIO):
     encoding = "utf-8"  # the preview picks Unicode glyphs only on UTF-8 outputs
 

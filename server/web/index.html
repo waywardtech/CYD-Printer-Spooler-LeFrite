@@ -64,7 +64,9 @@
   .pstat { font-size: 13px; padding: 7px 9px; border-radius: 6px; }
   .pstat.on { background: #2f4a29; color: #c9f2b6; }
   .pstat.off { background: #3d3424; color: #f0d29b; }
-  #vpmsg, #qmsg { white-space: normal; min-height: 1.2em; }
+  #vpmsg, #qmsg, #artmsg { white-space: normal; min-height: 1.2em; }
+  .artout { font: 9px/1.0 var(--mono); background: var(--cream); color: #1b1b22; padding: 8px; border-radius: 6px;
+            overflow: auto; max-height: 360px; margin: 10px 0 0; white-space: pre; }
 
   /* ---- fanfold paper ---- */
   #paperwrap { overflow: auto; max-height: 70vh; background: #151614; border-radius: 8px; padding: 10px 0; margin-top: 10px; }
@@ -137,6 +139,24 @@ Bold: B\bBO\bOL\bLD\bD   Underline: U\b_N\b_D\b_E\b_R\b_</textarea>
         </div>
         <div id="msg"></div>
       </form>
+    </section>
+    <section style="margin-top:16px">
+      <h2>Photo → ASCII art</h2>
+      <input type="file" id="photo" accept="image/*">
+      <div class="controls" style="margin-top:8px">
+        <label for="artw">Width</label>
+        <input id="artw" type="number" min="16" max="132" value="34" style="width:5em" title="34 columns fills the CYD's paper">
+        <label for="artc">Contrast</label>
+        <input id="artc" type="range" min="0.5" max="2.5" step="0.1" value="1.2" style="width:7em">
+        <span class="check" style="margin:0"><input type="checkbox" id="artd" checked><label for="artd">dither</label></span>
+        <span class="check" style="margin:0"><input type="checkbox" id="arti"><label for="arti">invert</label></span>
+      </div>
+      <pre id="artout" class="artout">choose a photo…</pre>
+      <div class="row" style="margin-top:8px">
+        <button type="button" id="artPreview" disabled>Preview on paper</button>
+        <button type="button" class="primary" id="artPrint" disabled>Print art ▶</button>
+      </div>
+      <div id="artmsg" class="id"></div>
     </section>
     <section style="margin-top:16px">
       <h2>Queue</h2>
@@ -465,6 +485,72 @@ $("screen").addEventListener("keydown", (e) => {
   else if (e.key === "ArrowRight") step(1);
   else if (e.key === "p" || e.key === "P") $("printFrameBtn").click();
 });
+
+// ---------- photo -> ASCII art (same algorithm as the CUPS backend) ----------
+const RAMP = " .,:;-~=+*xX#%@";      // paper ... heavy ink
+const art = { img: null, name: "", text: "" };
+function makeArt() {
+  if (!art.img) return;
+  const cols = Math.max(16, Math.min(132, +$("artw").value || 34));
+  const { naturalWidth: w, naturalHeight: h } = art.img;
+  const rows = Math.max(1, Math.min(200, Math.round(cols * h / w / 1.8)));
+  const cv = document.createElement("canvas");
+  cv.width = cols; cv.height = rows;
+  const cx = cv.getContext("2d");
+  cx.imageSmoothingQuality = "high";
+  cx.fillStyle = "#fff"; cx.fillRect(0, 0, cols, rows);       // transparent PNGs print on paper
+  cx.drawImage(art.img, 0, 0, cols, rows);                     // the browser averages each cell
+  const d = cx.getImageData(0, 0, cols, rows).data;
+  const lum = [];
+  for (let i = 0; i < cols * rows; i++) lum.push(0.299 * d[i * 4] + 0.587 * d[i * 4 + 1] + 0.114 * d[i * 4 + 2]);
+  const sorted = [...lum].sort((a, b) => a - b);
+  const lo = sorted[Math.floor(sorted.length * 0.02)], hi = sorted[Math.ceil(sorted.length * 0.98) - 1];
+  const span = Math.max(1, hi - lo), levels = RAMP.length - 1, k = +$("artc").value, inv = $("arti").checked;
+  const ink = lum.map((v) => {
+    let t = Math.min(1, Math.max(0, (hi - v) / span));        // 0 = paper, 1 = ink
+    if (inv) t = 1 - t;
+    t = Math.min(1, Math.max(0, (t - 0.5) * k + 0.5));        // contrast around mid-grey
+    return t * levels;
+  });
+  const out = [];
+  for (let r = 0; r < rows; r++) {
+    let line = "";
+    for (let c = 0; c < cols; c++) {
+      const i = r * cols + c, v = ink[i], q = Math.min(levels, Math.max(0, Math.round(v)));
+      line += RAMP[q];
+      if ($("artd").checked) {                                  // Floyd-Steinberg
+        const e = v - q;
+        if (c + 1 < cols) ink[i + 1] += e * 7 / 16;
+        if (r + 1 < rows) {
+          if (c > 0) ink[i + cols - 1] += e * 3 / 16;
+          ink[i + cols] += e * 5 / 16;
+          if (c + 1 < cols) ink[i + cols + 1] += e / 16;
+        }
+      }
+    }
+    out.push(line.replace(/\s+$/, ""));
+  }
+  art.text = out.join("\n") + "\n";
+  $("artout").textContent = art.text;
+  $("artmsg").textContent = `${cols} × ${rows} characters`;
+}
+$("photo").onchange = () => {
+  const f = $("photo").files[0];
+  if (!f) return;
+  const img = new Image();
+  img.onload = () => { art.img = img; art.name = f.name; $("artPreview").disabled = $("artPrint").disabled = false; makeArt(); };
+  img.onerror = () => { $("artmsg").textContent = "that file isn't an image the browser can read"; };
+  img.src = URL.createObjectURL(f);
+};
+for (const id of ["artw", "artc", "artd", "arti"]) $(id).addEventListener("input", makeArt);
+$("artPreview").onclick = () => printOnPaper(art.text, { title: art.name, style: $("style").value });
+$("artPrint").onclick = async () => {
+  try {
+    const r = await queueJob({ title: `ASCII art: ${art.name}`.slice(0, 120), source: "web", mode: "print",
+                               style: $("style").value, chaos: "off", body: art.text });
+    $("artmsg").textContent = r.ok ? `queued ${r.id}` : `error: ${r.error}`;
+  } catch (e) { $("artmsg").textContent = "cannot reach spooler"; }
+};
 
 refresh(); loadAnims().then(ensureAnim).catch(() => {});
 setInterval(refresh, 5000);

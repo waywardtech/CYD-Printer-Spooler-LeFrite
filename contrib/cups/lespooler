@@ -6,21 +6,32 @@ the LAN) print to the fanfold printer.
 Device URI:  lespooler://HOST:PORT        e.g. lespooler://127.0.0.1:8765
 
 CUPS calls a backend as:
-    lespooler                                     -> list devices (discovery)
+    lespooler                                       -> list devices (discovery)
     lespooler JOB USER TITLE COPIES OPTIONS [FILE]  -> print one job
 
-Desktop apps usually send PDF; that's turned into text with `pdftotext -layout`
-(page breaks become form feeds, which LE SPOOLER feeds to the next form).
-PostScript goes through ghostscript's txtwrite device. Plain text passes through.
-A PDF that is only a picture of a page (Windows/macOS driverless printing, phones,
-scans) is read with OCR when tesseract-ocr is installed.
+What it does with a job:
+  * text          -> printed as-is (control characters survive)
+  * PDF           -> pdftotext -layout  (page breaks become form feeds)
+  * PostScript    -> ghostscript txtwrite
+  * pages that are only *pictures* (Windows/macOS driverless printing, scans,
+    photos) are rendered and looked at:
+       - mostly words   -> OCR with tesseract
+       - mostly picture -> ASCII art, sized for the paper
+  * nothing usable  -> a short notice is printed; the queue never stalls
 
-Install: see contrib/cups/install-cups-printer.sh. Standard library only.
-Installed mode 0755 so CUPS runs it as the unprivileged 'lp' user, not root.
+Print options (from the PPD, or `lp -o NAME=VALUE`):
+  LeSpoolerMode = Auto | Text | Picture      (default Auto)
+  AsciiWidth    = 34 | 48 | 64 | 80          (default 34 = the CYD's paper)
+
+Standard library only (plus the poppler / ghostscript / tesseract command-line
+tools when they're installed). Installed mode 0755 so CUPS runs it as the
+unprivileged 'lp' user, not root.
 """
 
 import json
 import os
+import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -31,7 +42,12 @@ from urllib.parse import urlparse
 
 # CUPS backend exit codes
 OK, FAILED, RETRY = 0, 1, 6
-MAX_BYTES = 1024 * 1024 - 4096  # stay under the spooler's 1 MiB limit
+MAX_BODY_BYTES = 1024 * 1024 - 4096   # stay under the spooler's 1 MiB limit
+MAX_RASTER_PAGES = 8                  # OCR / ASCII art is slow on a small board
+OCR_DPI, ART_DPI = 300, 72
+TEXT_WORDS_THRESHOLD = 12             # confident words on a page => it's text, not a picture
+ASCII_RAMP = " .,:;-~=+*xX#%@"        # light paper ... heavy ink
+CHAR_ASPECT = 1.8                     # printer cells are ~1.8x taller than wide
 
 
 def log(level, msg):
@@ -39,75 +55,291 @@ def log(level, msg):
     sys.stderr.flush()
 
 
-def sniff(data: bytes, content_type: str) -> str:
-    if data.startswith(b"%PDF"):
+# --------------------------------------------------------------------------
+# Input
+# --------------------------------------------------------------------------
+
+def spool_to_file(argv, workdir):
+    """Return a path to the job data without ever holding it all in memory."""
+    if len(argv) == 7:
+        return argv[6]
+    path = os.path.join(workdir, "job.bin")
+    with open(path, "wb") as out:
+        shutil.copyfileobj(sys.stdin.buffer, out, 1024 * 1024)
+    return path
+
+
+def sniff(path, content_type):
+    with open(path, "rb") as f:
+        head = f.read(4096)
+    if head.startswith(b"%PDF"):
         return "pdf"
-    if data.startswith(b"%!"):
+    if head.startswith(b"%!") or head.startswith(b"\x1b%-12345X"):  # PJL-wrapped PostScript too
+        return "ps"
+    if content_type in ("application/pdf", "application/vnd.cups-pdf"):
+        return "pdf"
+    if "postscript" in content_type:
         return "ps"
     if content_type.startswith("text/") or not content_type:
         return "text"
-    if content_type in ("application/pdf", "application/vnd.cups-pdf"):
-        return "pdf"
-    if content_type in ("application/postscript", "application/vnd.cups-postscript"):
-        return "ps"
-    # Unknown: if it decodes as UTF-8 text, treat it as text.
     try:
-        data.decode("utf-8")
+        head.decode("utf-8")
         return "text"
     except UnicodeDecodeError:
         return "binary"
 
 
-def run(cmd, data):
-    with tempfile.NamedTemporaryFile(suffix=".bin") as tmp:
-        tmp.write(data)
-        tmp.flush()
-        cmd = [c if c != "{in}" else tmp.name for c in cmd]
-        return subprocess.run(cmd, capture_output=True, timeout=120, check=True).stdout
+def parse_options(opt_string):
+    opts = {}
+    for item in shlex.split(opt_string or ""):
+        if "=" in item:
+            k, v = item.split("=", 1)
+            opts[k.lower()] = v
+    return opts
 
 
-def to_text(data: bytes, kind: str) -> str:
-    if kind == "pdf":
-        if shutil.which("pdftotext"):
-            out = run(["pdftotext", "-layout", "-enc", "UTF-8", "{in}", "-"], data)
-        elif shutil.which("gs"):
-            out = run(["gs", "-q", "-dNOPAUSE", "-dBATCH", "-sDEVICE=txtwrite", "-sOutputFile=-", "{in}"], data)
-        else:
-            raise RuntimeError("PDF job but neither pdftotext (poppler-utils) nor gs (ghostscript) is installed")
-    elif kind == "ps":
-        if not shutil.which("gs"):
-            raise RuntimeError("PostScript job but ghostscript (gs) is not installed")
-        out = run(["gs", "-q", "-dNOPAUSE", "-dBATCH", "-sDEVICE=txtwrite", "-sOutputFile=-", "{in}"], data)
-    elif kind == "text":
-        out = data
+def run(cmd, timeout=600):
+    return subprocess.run(cmd, capture_output=True, timeout=timeout, check=True).stdout
+
+
+# --------------------------------------------------------------------------
+# Text extraction
+# --------------------------------------------------------------------------
+
+def extract_text(path, kind):
+    """Text layer of the document, one string per page ('' for picture-only pages)."""
+    if kind == "pdf" and shutil.which("pdftotext"):
+        out = run(["pdftotext", "-layout", "-enc", "UTF-8", path, "-"])
+    elif kind in ("pdf", "ps") and shutil.which("gs"):
+        out = run(["gs", "-q", "-dNOPAUSE", "-dBATCH", "-dSAFER", "-sDEVICE=txtwrite", "-sOutputFile=-", path])
     else:
-        raise RuntimeError("LE SPOOLER only prints text, PDF or PostScript (got binary data)")
-    text = out.decode("utf-8", errors="replace").replace("\r\n", "\n")
-    if kind == "pdf" and not text.replace("\f", "").strip():
-        # A picture of a page (Windows/macOS driverless printing, phones, scans):
-        # read the text back out with OCR if tesseract is installed.
-        text = ocr_pdf(data)
-    # pdftotext ends every page with \f; drop the very last one so we don't feed a blank form
-    return text[:-1] if text.endswith("\f") else text
+        return None
+    pages = out.decode("utf-8", errors="replace").replace("\r\n", "\n").split("\f")
+    if pages and not pages[-1].strip():
+        pages.pop()                                  # trailing \f after the last page
+    return pages
 
 
-def ocr_pdf(data: bytes) -> str:
-    if not (shutil.which("tesseract") and shutil.which("pdftoppm")):
-        log("INFO", "Page is an image and tesseract-ocr is not installed; can't read text from it")
-        return ""
-    log("INFO", "Page is an image; reading the text with OCR (tesseract)")
-    with tempfile.TemporaryDirectory(prefix="lespooler-ocr-") as tmp:
-        pdf = os.path.join(tmp, "job.pdf")
-        with open(pdf, "wb") as f:
-            f.write(data)
-        subprocess.run(["pdftoppm", "-r", "300", "-gray", "-png", "-l", "20", pdf, os.path.join(tmp, "p")],
-                       check=True, timeout=300, capture_output=True)
-        pages = []
-        for png in sorted(n for n in os.listdir(tmp) if n.endswith(".png")):
-            out = subprocess.run(["tesseract", os.path.join(tmp, png), "-", "--psm", "4"],
-                                 check=True, timeout=300, capture_output=True).stdout
-            pages.append(out.decode("utf-8", errors="replace").rstrip() + "\n")
-        return "\f".join(pages)
+def render_pages(path, kind, dpi, workdir, tag, first=1, last=MAX_RASTER_PAGES):
+    """Rasterise pages to 8-bit greyscale PGM files; returns the paths in page order."""
+    prefix = os.path.join(workdir, f"{tag}{dpi}")
+    if kind == "pdf" and shutil.which("pdftoppm"):
+        run(["pdftoppm", "-gray", "-r", str(dpi), "-f", str(first), "-l", str(last), path, prefix])
+    elif shutil.which("gs"):
+        run(["gs", "-q", "-dNOPAUSE", "-dBATCH", "-dSAFER", "-sDEVICE=pgmraw", f"-r{dpi}",
+             f"-dFirstPage={first}", f"-dLastPage={last}", f"-sOutputFile={prefix}-%03d.pgm", path])
+    else:
+        return []
+    return sorted(os.path.join(workdir, n) for n in os.listdir(workdir)
+                  if n.startswith(os.path.basename(prefix)) and n.endswith(".pgm"))
+
+
+# --------------------------------------------------------------------------
+# OCR
+# --------------------------------------------------------------------------
+
+def ocr_page(pgm):
+    """OCR one page. Returns (text, confident_word_count)."""
+    tsv = run(["tesseract", pgm, "-", "--psm", "3", "-c", "preserve_interword_spaces=1", "tsv"],
+              timeout=300).decode("utf-8", errors="replace")
+    return tsv_to_text(tsv)
+
+
+def tsv_to_text(tsv):
+    """Rebuild lines from tesseract TSV, keeping paragraph breaks and rough indentation."""
+    lines, good = {}, 0
+    order = []
+    char_w = []
+    rows = [r.split("\t") for r in tsv.splitlines()[1:]]
+    for r in rows:
+        if len(r) < 12 or r[0] != "5":
+            continue
+        try:
+            conf = float(r[10])
+        except ValueError:
+            continue
+        word = r[11].strip()
+        if not word or conf < 35:
+            continue
+        if conf >= 70 and len(re.sub(r"[^A-Za-z0-9]", "", word)) >= 3:
+            good += 1
+        left, width = int(r[6]), int(r[8])
+        char_w.append(width / max(1, len(word)))
+        key = (int(r[2]), int(r[3]), int(r[4]))      # block, paragraph, line
+        if key not in lines:
+            lines[key] = []
+            order.append(key)
+        lines[key].append((left, word))
+    if not order:
+        return "", 0
+    cw = sorted(char_w)[len(char_w) // 2] or 10       # median character width in pixels
+    min_left = min(w[0][0] for w in lines.values())
+    out, prev = [], None
+    for key in order:
+        if prev and key[:2] != prev[:2]:
+            out.append("")                           # new paragraph / block
+        words = sorted(lines[key])
+        indent = int((words[0][0] - min_left) / cw)
+        out.append(" " * min(indent, 40) + " ".join(w for _, w in words))
+        prev = key
+    return "\n".join(out).strip("\n") + "\n", good
+
+
+# --------------------------------------------------------------------------
+# ASCII art
+# --------------------------------------------------------------------------
+
+def read_pgm(path):
+    """Minimal binary PGM (P5, 8-bit) reader. Returns (width, height, bytes)."""
+    with open(path, "rb") as f:
+        data = f.read()
+    tokens, pos = [], 0
+    while len(tokens) < 4:
+        while data[pos:pos + 1].isspace():
+            pos += 1
+        if data[pos:pos + 1] == b"#":
+            pos = data.index(b"\n", pos) + 1
+            continue
+        start = pos
+        while not data[pos:pos + 1].isspace():
+            pos += 1
+        tokens.append(data[start:pos])
+    if tokens[0] != b"P5" or int(tokens[3]) > 255:
+        raise ValueError("expected an 8-bit binary PGM")
+    w, h = int(tokens[1]), int(tokens[2])
+    return w, h, data[pos + 1: pos + 1 + w * h]
+
+
+def ascii_art(w, h, px, cols=34, dither=True, aspect=CHAR_ASPECT, ramp=ASCII_RAMP):
+    """Greyscale pixels -> ASCII art. Crops the white page margins first."""
+    # bounding box of anything that isn't paper-white
+    x0, y0, x1, y1 = w, h, -1, -1
+    step = max(1, min(w, h) // 400)
+    for y in range(0, h, step):
+        row = px[y * w:(y + 1) * w]
+        for x in range(0, w, step):
+            if row[x] < 235:
+                if x < x0: x0 = x
+                if x > x1: x1 = x
+                if y < y0: y0 = y
+                if y > y1: y1 = y
+    if x1 < 0:
+        return ""                                    # blank page
+    x1, y1 = min(w - 1, x1 + step), min(h - 1, y1 + step)
+    bw, bh = x1 - x0 + 1, y1 - y0 + 1
+    cols = max(8, min(cols, bw))
+    rows = max(1, min(200, round(cols * bh / bw / aspect)))
+    cell_w, cell_h = bw / cols, bh / rows
+
+    # average brightness per character cell (sampled, so big pages stay quick)
+    vals = []
+    for r in range(rows):
+        ya, yb = int(y0 + r * cell_h), max(int(y0 + r * cell_h) + 1, int(y0 + (r + 1) * cell_h))
+        sy = max(1, (yb - ya) // 6)
+        line = []
+        for c in range(cols):
+            xa, xb = int(x0 + c * cell_w), max(int(x0 + c * cell_w) + 1, int(x0 + (c + 1) * cell_w))
+            sx = max(1, (xb - xa) // 6)
+            tot = n = 0
+            for y in range(ya, yb, sy):
+                base = y * w
+                for x in range(xa, xb, sx):
+                    tot += px[base + x]
+                    n += 1
+            line.append(tot / n)
+        vals.append(line)
+
+    # auto-contrast: stretch the 2nd..98th percentile to the full ramp
+    flat = sorted(v for line in vals for v in line)
+    lo, hi = flat[int(len(flat) * 0.02)], flat[int(len(flat) * 0.98) - 1]
+    span = max(1.0, hi - lo)
+    levels = len(ramp) - 1
+    ink = [[min(1.0, max(0.0, (hi - v) / span)) * levels for v in line] for line in vals]  # 0 = paper
+
+    out = []
+    for r in range(rows):
+        chars = []
+        for c in range(cols):
+            v = ink[r][c]
+            q = min(levels, max(0, round(v)))
+            chars.append(ramp[q])
+            if dither:                               # Floyd-Steinberg on the ramp levels
+                err = v - q
+                if c + 1 < cols:
+                    ink[r][c + 1] += err * 7 / 16
+                if r + 1 < rows:
+                    if c > 0:
+                        ink[r + 1][c - 1] += err * 3 / 16
+                    ink[r + 1][c] += err * 5 / 16
+                    if c + 1 < cols:
+                        ink[r + 1][c + 1] += err * 1 / 16
+        out.append("".join(chars).rstrip())
+    while out and not out[-1]:
+        out.pop()
+    while out and not out[0]:
+        out.pop(0)
+    return "\n".join(out) + "\n"
+
+
+# --------------------------------------------------------------------------
+# Picture pages: OCR or ASCII art
+# --------------------------------------------------------------------------
+
+def picture_pages(path, kind, page_numbers, mode, cols, workdir):
+    """Turn picture-only pages into text (OCR) or ASCII art. Returns {page_no: text}."""
+    results = {}
+    have_ocr = bool(shutil.which("tesseract"))
+    for n in page_numbers[:MAX_RASTER_PAGES]:
+        verdict = "art"
+        if mode != "picture" and have_ocr:
+            hi = render_pages(path, kind, OCR_DPI, workdir, f"o{n}-", n, n)
+            if hi:
+                text, good = ocr_page(hi[0])
+                if mode == "text" or good >= TEXT_WORDS_THRESHOLD:
+                    log("INFO", f"Page {n}: reading the text with OCR ({good} confident words)")
+                    results[n] = text
+                    verdict = "text"
+                for p in hi:
+                    os.remove(p)
+        elif mode == "text":
+            log("INFO", "tesseract-ocr is not installed, so picture pages can't be read as text")
+        if verdict == "art":
+            lo = render_pages(path, kind, ART_DPI, workdir, f"a{n}-", n, n)
+            if lo:
+                log("INFO", f"Page {n}: it's a picture, drawing it as {cols}-column ASCII art")
+                results[n] = ascii_art(*read_pgm(lo[0]), cols=cols)
+    return results
+
+
+def document_to_text(path, kind, mode, cols, workdir):
+    if kind == "text":
+        with open(path, "rb") as f:
+            return f.read(MAX_BODY_BYTES).decode("utf-8", errors="replace")
+    if kind == "binary":
+        raise ValueError("LE SPOOLER prints text, PDF or PostScript (got some other binary format)")
+
+    pages = extract_text(path, kind) if mode != "picture" else None
+    if pages is None:                                # picture mode, or no text tools: rasterise
+        n_pages = len(render_pages(path, kind, 10, workdir, "count-", 1, MAX_RASTER_PAGES))
+        pages = [""] * n_pages
+    if not pages:
+        pages = [""]
+    empty = [i + 1 for i, p in enumerate(pages) if not p.strip()]
+    if empty:
+        for n, text in picture_pages(path, kind, empty, mode, cols, workdir).items():
+            pages[n - 1] = text
+    return "\f".join(p if p.endswith("\n") or not p else p + "\n" for p in pages)
+
+
+# --------------------------------------------------------------------------
+# Main
+# --------------------------------------------------------------------------
+
+def send(base, payload):
+    req = urllib.request.Request(base + "/print", data=json.dumps(payload).encode("utf-8"),
+                                 headers={"Content-Type": "application/json"}, method="POST")
+    with urllib.request.urlopen(req, timeout=15) as r:
+        return json.load(r)
 
 
 def main(argv):
@@ -119,45 +351,48 @@ def main(argv):
         log("ERROR", "usage: lespooler job-id user title copies options [file]")
         return FAILED
 
-    job_id, user, title, copies = argv[1], argv[2], argv[3], max(1, int(argv[4] or 1))
+    job_id, user, title = argv[1], argv[2], argv[3]
+    copies = max(1, int(argv[4] or 1))
+    opts = parse_options(argv[5])
+    mode = opts.get("lespoolermode", "auto").lower()
+    try:
+        cols = max(16, min(132, int(opts.get("asciiwidth", "34"))))
+    except ValueError:
+        cols = 34
     uri = urlparse(os.environ.get("DEVICE_URI", "lespooler://127.0.0.1:8765"))
     base = f"http://{uri.hostname or '127.0.0.1'}:{uri.port or 8765}"
 
-    if len(argv) == 7:
-        with open(argv[6], "rb") as f:
-            data = f.read()
-    else:
-        data = sys.stdin.buffer.read()
+    with tempfile.TemporaryDirectory(prefix="lespooler-") as workdir:
+        path = spool_to_file(argv, workdir)
+        kind = sniff(path, os.environ.get("CONTENT_TYPE", ""))
+        log("INFO", f"Converting {kind} job ({os.path.getsize(path) // 1024} KiB) for LE SPOOLER, mode={mode}")
+        try:
+            body = document_to_text(path, kind, mode, cols, workdir)
+        except (ValueError, OSError, subprocess.SubprocessError) as e:
+            log("ERROR", f"Couldn't convert this job: {e}")
+            body = ""
+            title_note = f"[LE SPOOLER couldn't read '{title}': {str(e)[:120]}]\n"
+        else:
+            title_note = f"[LE SPOOLER found nothing printable in '{title}']\n"
 
-    kind = sniff(data, os.environ.get("CONTENT_TYPE", ""))
-    log("INFO", f"Converting {kind} job for LE SPOOLER")
-    try:
-        text = to_text(data, kind)
-    except (RuntimeError, subprocess.SubprocessError) as e:
-        log("ERROR", str(e))
-        return FAILED
-    if not text.strip():
-        log("ERROR", "Nothing printable in this job: the page is an image with no text layer "
-                     "(install tesseract-ocr to read it, or use a text-only driver)")
-        return FAILED
-    body = (text if text.endswith("\n") else text + "\n")
-    body = ((body + "\f") * copies)[:-1] if copies > 1 else body
-    body = body.encode("utf-8")[:MAX_BYTES].decode("utf-8", errors="ignore")
+    if not body.replace("\f", "").strip():
+        body = title_note                            # tell the user instead of stalling the queue
+    body = body if body.endswith("\n") else body + "\n"
+    if copies > 1:
+        body = "\f".join([body] * copies)
+    body = body.encode("utf-8")[:MAX_BODY_BYTES].decode("utf-8", errors="ignore")
 
     payload = {"title": (title or f"CUPS job {job_id}")[:120], "source": f"cups:{user}",
                "mode": "print", "style": "greenbar", "body": body}
-    req = urllib.request.Request(base + "/print", data=json.dumps(payload).encode("utf-8"),
-                                 headers={"Content-Type": "application/json"}, method="POST")
     log("INFO", f"Sending to LE SPOOLER at {base}")
     try:
-        with urllib.request.urlopen(req, timeout=15) as r:
-            result = json.load(r)
+        result = send(base, payload)
     except urllib.error.HTTPError as e:
         log("ERROR", f"LE SPOOLER refused the job: HTTP {e.code}")
-        return FAILED
+        return OK                                    # content problem: don't block the queue
     except (urllib.error.URLError, OSError) as e:
         log("ERROR", f"LE SPOOLER not reachable at {base}: {getattr(e, 'reason', e)}. Will retry.")
-        return RETRY
+        return RETRY                                 # the only case worth holding the queue for
     log("INFO", f"Queued as {result.get('id')} on LE SPOOLER")
     return OK
 
