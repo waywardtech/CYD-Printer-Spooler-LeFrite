@@ -18,6 +18,7 @@ QUEUE="${QUEUE:-LE_SPOOLER}"
 PORT="${LE_SPOOLER_PORT:-8765}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BACKEND_DIR="$(cups-config --serverbin 2>/dev/null || echo /usr/lib/cups)/backend"
+LIBDIR=/usr/local/lib/le-spooler
 say() { printf '\033[1m==>\033[0m %s\n' "$*"; }
 
 [[ $EUID -eq 0 ]] || { echo "Run with sudo: sudo $0 $*"; exit 1; }
@@ -26,6 +27,7 @@ if [[ "${1:-}" == "--uninstall" ]]; then
   say "Removing queue $QUEUE and the lespooler backend"
   lpadmin -x "$QUEUE" 2>/dev/null || true
   rm -f "$BACKEND_DIR/lespooler"
+  rm -rf "$LIBDIR"
   say "Done. (Printer sharing and avahi were left as they were: 'cupsctl --no-share-printers' turns sharing off.)"
   exit 0
 fi
@@ -43,8 +45,17 @@ if ((${#need[@]})); then
   apt-get update -qq && apt-get install -y -qq "${need[@]}"
 fi
 
-say "Installing backend -> $BACKEND_DIR/lespooler"
-install -m 0755 "$HERE/lespooler" "$BACKEND_DIR/lespooler"
+# The real backend lives in $LIBDIR, owned by the user who ran sudo, so it can be
+# updated later without root (contrib/cups/update-backend.sh). CUPS runs a fixed
+# two-line launcher from its own (root-owned) backend directory.
+OWNER="${SUDO_USER:-root}"
+say "Installing backend -> $LIBDIR/lespooler (updatable by $OWNER)"
+install -d -o "$OWNER" -m 0755 "$LIBDIR"
+install -o "$OWNER" -m 0755 "$HERE/lespooler" "$LIBDIR/lespooler"
+say "Installing launcher -> $BACKEND_DIR/lespooler"
+printf '#!/bin/sh\n# LE SPOOLER CUPS backend launcher (see %s)\nexec /usr/bin/python3 %s/lespooler "$@"\n' \
+  "$LIBDIR" "$LIBDIR" > "$BACKEND_DIR/lespooler"
+chmod 0755 "$BACKEND_DIR/lespooler"
 
 say "Creating print queue $QUEUE"
 /usr/sbin/lpadmin -p "$QUEUE" -E \

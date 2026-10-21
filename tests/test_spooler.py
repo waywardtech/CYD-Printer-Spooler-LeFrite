@@ -267,7 +267,10 @@ class BackendTest(unittest.TestCase):
         page2 = "\r\n          Page two\r\n"
         self.assertEqual(self.be.tidy(page1 + "\f" + page2),
                          "Title\n  indented\ncafe\b'\n\fPage two\n")
-        self.assertEqual(self.be.tidy_page("ABC\r---\n"), "ABC\r---\n")   # a lone CR is an overprint
+        self.assertEqual(self.be.tidy("ABC\r---\nnext line\n"), "ABC\r---\nnext line\n")  # overprint kept
+        # what actually reached the backend from Windows: CR-only line endings, trailing FF
+        crs = "\n\n\n\n\n\n          Line one\r          Line two\r            indented\r\f"
+        self.assertEqual(self.be.tidy(crs), "Line one\nLine two\n  indented\n")
 
     def test_tsv_rebuilds_lines_and_counts_confident_words(self):
         head = "level\tpage_num\tblock_num\tpar_num\tline_num\tword_num\tleft\ttop\twidth\theight\tconf\ttext\n"

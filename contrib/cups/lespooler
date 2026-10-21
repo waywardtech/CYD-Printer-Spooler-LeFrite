@@ -329,7 +329,16 @@ def tidy_page(page):
 
 
 def tidy(text):
-    return "\f".join(tidy_page(p) for p in text.split("\f"))
+    text = text.replace("\r\n", "\n")
+    core = text.strip("\r\n\f \t")
+    if "\r" in core and "\n" not in core:
+        # CR-only line endings (seen from Windows' text-only driver via the Internet
+        # Printing Client). A real overprint document would still have line feeds.
+        text = text.replace("\r", "\n")
+    pages = [tidy_page(p) for p in text.split("\f")]
+    while pages and not pages[-1].strip():
+        pages.pop()                                  # no blank form after the last page
+    return "\f".join(pages)
 
 
 def document_to_text(path, kind, mode, cols, workdir):
