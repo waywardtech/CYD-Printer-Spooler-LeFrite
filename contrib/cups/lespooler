@@ -328,14 +328,20 @@ def tidy_page(page):
     return "\n".join(l[cut:] for l in lines) + ("\n" if lines else "")
 
 
+def fix_cr_line_endings(page):
+    """
+    CR-only line endings (seen from Windows' text-only driver via the Internet
+    Printing Client): if a page's text has CRs but no line feeds at all, the CRs
+    are line breaks. A real overprint page would still have line feeds. Checked
+    per page, because blank top-margin lines are real LFs on every page.
+    """
+    core = page.strip("\r\n\f \t")
+    return page.replace("\r", "\n") if "\r" in core and "\n" not in core else page
+
+
 def tidy(text):
     text = text.replace("\r\n", "\n")
-    core = text.strip("\r\n\f \t")
-    if "\r" in core and "\n" not in core:
-        # CR-only line endings (seen from Windows' text-only driver via the Internet
-        # Printing Client). A real overprint document would still have line feeds.
-        text = text.replace("\r", "\n")
-    pages = [tidy_page(p) for p in text.split("\f")]
+    pages = [tidy_page(fix_cr_line_endings(p)) for p in text.split("\f")]
     while pages and not pages[-1].strip():
         pages.pop()                                  # no blank form after the last page
     return "\f".join(pages)

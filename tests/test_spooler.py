@@ -271,6 +271,9 @@ class BackendTest(unittest.TestCase):
         # what actually reached the backend from Windows: CR-only line endings, trailing FF
         crs = "\n\n\n\n\n\n          Line one\r          Line two\r            indented\r\f"
         self.assertEqual(self.be.tidy(crs), "Line one\nLine two\n  indented\n")
+        # multi-page: every page starts with real-LF margin lines, lines inside use CR
+        page = "\n\n\n\n\n\n          a\r          b\r"
+        self.assertEqual(self.be.tidy(page + "\f" + page + "\f"), "a\nb\n\fa\nb\n")
 
     def test_tsv_rebuilds_lines_and_counts_confident_words(self):
         head = "level\tpage_num\tblock_num\tpar_num\tline_num\tword_num\tleft\ttop\twidth\theight\tconf\ttext\n"
