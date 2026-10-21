@@ -178,6 +178,7 @@ LAN discover it on their own.
 ```bash
 sudo contrib/cups/install-cups-printer.sh            # this machine only
 sudo contrib/cups/install-cups-printer.sh --share    # + discoverable on the LAN
+contrib/cups/update-backend.sh                       # later, after git pull: update the backend (no sudo)
 echo "HELLO FROM CUPS" | lp -d LE_SPOOLER            # test
 lp -d LE_SPOOLER ~/Documents/letter.pdf
 ```
@@ -196,7 +197,7 @@ localhost. Undo it with `sudo cupsctl --no-share-printers` and
 |---|---|
 | Linux (GNOME/KDE) | Shows up automatically (cups-browsed / driverless), or add it in Settings › Printers |
 | macOS | System Settings › Printers & Scanners › **+**, pick "LE SPOOLER fanfold printer". If asked for a driver, choose **Generic PostScript Printer**. |
-| Windows | Settings › Printers › Add device › "The printer that I want isn't listed" › by URL: `http://<your-box>:631/printers/LE_SPOOLER`, driver **Generic › Generic / Text Only** (best) or **Microsoft PS Class Driver**. Not an XPS driver: XPS can't be converted. |
+| Windows | Run `contrib\windows\install-windows-printer.ps1 -Server <your-box>` as administrator. It adds **LE SPOOLER** (IPP: Word, browsers, PDFs, photos) and **LE SPOOLER (plain text)** (Generic / Text Only: Notepad, console output). `contrib\windows\print-test-pages.ps1` prints a test page for every case and checks that each one reaches the printer. |
 
 > **Pictures of pages and photos.** Driverless printing from Windows, macOS and phones,
 > and Windows' PostScript driver, often send pages with no text layer. The backend
