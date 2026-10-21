@@ -355,7 +355,8 @@ async function refresh() {
     const ps = $("printerstatus");
     if (online.length) {
       ps.className = "pstat on";
-      ps.textContent = "🖨 Printer online: " + online.map((p) => p.name).join(", ");
+      ps.textContent = "🖨 Printer online: " + online.map((p) =>
+        p.printing ? `${p.name}, printing "${p.printing.title}"` : `${p.name}, idle`).join(" · ");
     } else {
       const last = (h.printers || [])[0];
       ps.className = "pstat off";

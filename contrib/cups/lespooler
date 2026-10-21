@@ -311,10 +311,36 @@ def picture_pages(path, kind, page_numbers, mode, cols, workdir):
     return results
 
 
+def tidy_page(page):
+    """
+    Drop the margins a driver or PDF layout adds: blank lines at the top and bottom
+    of the page and the indentation shared by every line (Windows' Generic / Text
+    Only driver indents ~10 columns, which wastes a third of the CYD's 34). A lone
+    CR is kept - it's a real overprint - but CR LF line endings become LF.
+    """
+    lines = [l.rstrip(" \t") for l in page.replace("\r\n", "\n").split("\n")]
+    while lines and not lines[0].strip():
+        lines.pop(0)
+    while lines and not lines[-1].strip():
+        lines.pop()
+    indents = [len(l) - len(l.lstrip(" ")) for l in lines if l.strip()]
+    cut = min(indents) if indents else 0
+    return "\n".join(l[cut:] for l in lines) + ("\n" if lines else "")
+
+
+def tidy(text):
+    return "\f".join(tidy_page(p) for p in text.split("\f"))
+
+
 def document_to_text(path, kind, mode, cols, workdir):
     if kind == "text":
         with open(path, "rb") as f:
-            return f.read(MAX_BODY_BYTES).decode("utf-8", errors="replace")
+            raw = f.read(MAX_BODY_BYTES)
+        try:
+            text = raw.decode("utf-8")
+        except UnicodeDecodeError:
+            text = raw.decode("cp1252", errors="replace")  # Windows' text-only driver speaks ANSI
+        return tidy(text)
     if kind == "binary":
         raise ValueError("LE SPOOLER prints text, PDF or PostScript (got some other binary format)")
 
@@ -328,7 +354,7 @@ def document_to_text(path, kind, mode, cols, workdir):
     if empty:
         for n, text in picture_pages(path, kind, empty, mode, cols, workdir).items():
             pages[n - 1] = text
-    return "\f".join(p if p.endswith("\n") or not p else p + "\n" for p in pages)
+    return tidy("\f".join(pages))
 
 
 # --------------------------------------------------------------------------

@@ -161,6 +161,18 @@ class SpoolerTest(unittest.TestCase):
         _, h = http("GET", self.base + "/health")
         p = next(p for p in h["printers"] if p["name"] == "Bench CYD")
         self.assertTrue(p["online"])
+        self.assertIsNone(p["printing"])
+
+    def test_printer_is_busy_until_it_acks(self):
+        _, r = http("POST", self.base + "/print", {"title": "Long one", "body": "x"})
+        http("GET", self.base + "/next?printer=Busy%20CYD")
+        srv.PRINTERS["Busy CYD"]["last_seen"] -= 120          # silent for 2 min while it prints
+        p = next(p for p in http("GET", self.base + "/health")[1]["printers"] if p["name"] == "Busy CYD")
+        self.assertTrue(p["online"])
+        self.assertEqual(p["printing"]["title"], "Long one")
+        http("POST", f"{self.base}/ack/{r['id']}")
+        p = next(p for p in http("GET", self.base + "/health")[1]["printers"] if p["name"] == "Busy CYD")
+        self.assertIsNone(p["printing"])
 
     def test_jobs_listing(self):
         _, r = http("POST", self.base + "/print", {"title": "Listed", "body": "abc"})
@@ -248,6 +260,14 @@ class BackendTest(unittest.TestCase):
     def test_options(self):
         o = self.be.parse_options("job-uuid=urn:x LeSpoolerMode=Picture AsciiWidth=48 'media=9.5x11'")
         self.assertEqual((o["lespoolermode"], o["asciiwidth"], o["media"]), ("Picture", "48", "9.5x11"))
+
+    def test_tidy_strips_driver_margins_per_page(self):
+        # what Windows' Generic / Text Only driver sends: CRLF, blank top margin, 10-col indent
+        page1 = "\r\n\r\n\r\n          Title\r\n            indented\r\n          cafe\b'\r\n\r\n"
+        page2 = "\r\n          Page two\r\n"
+        self.assertEqual(self.be.tidy(page1 + "\f" + page2),
+                         "Title\n  indented\ncafe\b'\n\fPage two\n")
+        self.assertEqual(self.be.tidy_page("ABC\r---\n"), "ABC\r---\n")   # a lone CR is an overprint
 
     def test_tsv_rebuilds_lines_and_counts_confident_words(self):
         head = "level\tpage_num\tblock_num\tpar_num\tline_num\tword_num\tleft\ttop\twidth\theight\tconf\ttext\n"

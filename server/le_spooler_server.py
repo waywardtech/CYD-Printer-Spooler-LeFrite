@@ -46,7 +46,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-VERSION = "0.5.0"
+VERSION = "0.5.1"
 DEFAULT_HOST = "0.0.0.0"
 DEFAULT_PORT = 8765
 MAX_BODY_BYTES = 1024 * 1024  # 1 MiB is a *lot* of fanfold paper
@@ -275,6 +275,7 @@ def enqueue(fields: dict) -> dict:
 
 def acknowledge(job_id: str):
     """Move a job to printed/. Idempotent: acking a printed job is OK."""
+    note_printed(job_id)
     with SPOOL_LOCK:
         path, status = job_path(job_id)
         if path is None:
@@ -331,15 +332,25 @@ def reprint(job_id: str):
 
 
 # Which printers are collecting jobs? Anything that polls /next counts.
-PRINTERS = {}  # name -> {"address", "agent", "last_seen"}
+PRINTERS = {}  # name -> {"address", "agent", "last_seen", "job": {"id", "title"} | None}
 PRINTER_ONLINE_SECONDS = 30
+PRINTER_BUSY_SECONDS = 30 * 60  # a printer mid-job doesn't poll; it's still there for this long
 
 
-def note_printer(address: str, agent: str, name: str = "") -> None:
+def note_printer(address: str, agent: str, name: str = "", job=None) -> None:
     if not name:
         name = "CYD" if "ESP32" in agent else (agent.split("/")[0] or "printer")
         name = f"{name} @ {address}"
-    PRINTERS[name] = {"address": address, "agent": agent, "last_seen": time.time()}
+    PRINTERS[name] = {"address": address, "agent": agent, "last_seen": time.time(),
+                      "job": {"id": job["id"], "title": job.get("title", "")} if job else None}
+
+
+def note_printed(job_id: str) -> None:
+    """The printer that took this job has finished it."""
+    for p in PRINTERS.values():
+        if p.get("job") and p["job"]["id"] == job_id:
+            p["job"] = None
+            p["last_seen"] = time.time()
 
 
 def printer_status() -> list:
@@ -347,9 +358,11 @@ def printer_status() -> list:
     out = []
     for name, p in sorted(PRINTERS.items(), key=lambda kv: -kv[1]["last_seen"]):
         age = now - p["last_seen"]
+        busy = p.get("job") is not None and age < PRINTER_BUSY_SECONDS
         if age < 24 * 3600:
             out.append({"name": name, "address": p["address"], "seconds_ago": round(age, 1),
-                        "online": age < PRINTER_ONLINE_SECONDS})
+                        "online": age < PRINTER_ONLINE_SECONDS or busy,
+                        "printing": p["job"] if busy else None})
     return out
 
 
@@ -555,9 +568,9 @@ class SpoolerHandler(BaseHTTPRequestHandler):
 
             if parts == ["next"]:
                 # ?printer=NAME lets a client label itself (the web UI's virtual printer does)
-                note_printer(self.client_address[0], self.headers.get("User-Agent", ""),
-                             (q.get("printer") or [""])[0][:60])
                 job = next_job()
+                note_printer(self.client_address[0], self.headers.get("User-Agent", ""),
+                             (q.get("printer") or [""])[0][:60], job)
                 if job is None:
                     return self.send_empty(HTTPStatus.NO_CONTENT)
                 if fmt == "text":

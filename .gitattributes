@@ -10,3 +10,4 @@
 *.service text eol=lf
 *.ppd  text eol=lf
 contrib/cups/lespooler text eol=lf
+*.ps1  text eol=crlf
