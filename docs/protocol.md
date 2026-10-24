@@ -12,14 +12,14 @@ writes it to microSD, and it goes over USB serial unchanged.
 
 ```
 @LE_SPOOLER_BEGIN
-TITLE: Hello Ellis
+TITLE: Hello World
 SOURCE: La Frite
 MODE: PRINT
 STYLE: GREENBAR
 SPEED: DAISYWHEEL
 CHAOS: LOW
 
-HELLO ELLIS
+HELLO WORLD
 
 THIS IS YOUR FIRST DOCUMENT.
 @LE_SPOOLER_END
@@ -102,8 +102,8 @@ so browser tools such as TurboWarp can call it.
 JSON (`Content-Type: application/json`):
 
 ```json
-{"title": "Hello Ellis", "source": "lafrite", "mode": "print",
- "style": "greenbar", "body": "HELLO ELLIS\n"}
+{"title": "Hello World", "source": "lafrite", "mode": "print",
+ "style": "greenbar", "body": "HELLO WORLD\n"}
 ```
 
 Only `body` is required (`text` is accepted as an alias). Control characters use

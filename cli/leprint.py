@@ -2,8 +2,8 @@
 """
 leprint - send a document to LE SPOOLER.
 
-    python3 leprint.py "HELLO ELLIS"
-    echo "HELLO ELLIS" | python3 leprint.py --title "Test"
+    python3 leprint.py "HELLO WORLD"
+    echo "HELLO WORLD" | python3 leprint.py --title "Test"
     python3 leprint.py --file letter.txt --title "Letter"
     python3 leprint.py --escapes "caf" "e\\b' au lait"     # -> café (overstrike)
 

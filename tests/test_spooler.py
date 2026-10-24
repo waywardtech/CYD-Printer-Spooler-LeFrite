@@ -75,8 +75,8 @@ class SpoolerTest(unittest.TestCase):
 
     def test_print_json_then_next_then_ack(self):
         code, r = http("POST", self.base + "/print",
-                       {"title": "Hello Ellis", "source": "test", "mode": "print",
-                        "style": "greenbar", "body": "HELLO ELLIS"})
+                       {"title": "Hello World", "source": "test", "mode": "print",
+                        "style": "greenbar", "body": "HELLO WORLD"})
         self.assertEqual(code, 201)
         jid = r["id"]
         self.assertRegex(jid, srv.JOB_ID_RE)
@@ -84,7 +84,7 @@ class SpoolerTest(unittest.TestCase):
         code, r = http("GET", self.base + "/next")
         self.assertEqual(code, 200)
         self.assertEqual(r["job"]["id"], jid)
-        self.assertEqual(r["job"]["body"], "HELLO ELLIS")
+        self.assertEqual(r["job"]["body"], "HELLO WORLD")
 
         code, r = http("POST", f"{self.base}/ack/{jid}")
         self.assertEqual((code, r["already_acked"]), (200, False))
@@ -207,7 +207,7 @@ class SpoolerTest(unittest.TestCase):
 
     def test_cli_prints_and_reads_stdin(self):
         cli = [sys.executable, str(ROOT / "cli" / "leprint.py"), "--server", self.base]
-        out = subprocess.run(cli + ["--title", "CLI", "HELLO", "ELLIS"], capture_output=True, text=True, check=True)
+        out = subprocess.run(cli + ["--title", "CLI", "HELLO", "WORLD"], capture_output=True, text=True, check=True)
         self.assertIn('"CLI"', out.stdout)
         out = subprocess.run(cli + ["-q", "-e"], input="cafe\\b'\n", capture_output=True, text=True, check=True)
         _, job = http("GET", f"{self.base}/jobs/{out.stdout.strip()}")

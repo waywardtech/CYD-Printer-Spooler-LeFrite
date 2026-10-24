@@ -18,7 +18,7 @@
 
 ---
 
-> *The first words it ever typed were* **HELLO ELLIS**. *They arrived one character at a time, about thirty every second, each with a tiny percussive click. Then the carriage whirred home, the platen ratcheted the paper up a line, and a bell rang.*
+> *The first word it ever typed was* **HELLO**. *It arrived one character at a time, about thirty every second, each with a tiny percussive click. Then the carriage whirred home, the platen ratcheted the paper up a line, and a bell rang.*
 
 **LE SPOOLER** turns a Linux box and an ESP32 **"Cheap Yellow Display"** into a pretend fanfold printer that behaves like a real one. It shows up in the Print dialog of Windows, Mac and Linux apps, is discoverable over Bonjour, and types every page out **one character at a time**. The paper is green-and-cream greenbar with sprocket holes and perforations, and you hear the clack of the hammer, the whirr of the carriage return and the *ding* of the bell.
 
@@ -123,7 +123,7 @@ python3 server/le_spooler_server.py          # listens on 0.0.0.0:8765
 **Print something**
 
 ```bash
-python3 cli/leprint.py --title "Hello Ellis" "HELLO ELLIS"
+python3 cli/leprint.py --title "Hello" "HELLO WORLD"
 echo "Printed from a pipe" | python3 cli/leprint.py --title "Pipe"
 python3 cli/leprint.py --file ~/letter.txt
 python3 cli/leprint.py -e "Accents the old way: cafe\b' garc\b,on man\b~ana\a"
