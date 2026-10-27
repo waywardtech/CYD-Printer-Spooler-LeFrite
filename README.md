@@ -26,6 +26,8 @@ Accents are made the old way, by **overstrike**: `e`, backspace, `'` becomes **�
 
 It's a fun weekend build, a great way to explore **classic technology with kids**, and a surprisingly useful rig for **testing printing on your home network**.
 
+> **Le or la?** *Le*. French already has the word: *le spouleur*, a masculine noun for the program that queues print jobs. The printer itself is feminine (*une imprimante*), so a name for the hardware would have been *La Spooleuse*. Instead, the masculine *le* spooler runs on a board called ***La*** Frite: le and la, sharing one tiny Linux computer.
+
 ## 📰 The story
 
 For most of computing's first three decades, **the screen was paper**. The Teletype Model 33 (1963) typed ten upper-case characters a second onto a roll. In 1970, Andrew Gabor at Diablo Data Systems patented the **daisy wheel**: every character on the tip of a plastic petal, spun into place and struck through a ribbon. By 1980 Diablo's 630 was what "letter quality" meant, at 30 characters a second. All of it ran on **fanfold paper**, 14⅞ × 11 inches, with half-inch greenbar stripes and sprocket holes down both edges: an icon of a bygone age.
